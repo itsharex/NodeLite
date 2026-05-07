@@ -98,18 +98,34 @@ struct RawServerSection {
     max_message_bytes: usize,
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawUiSection {
     #[serde(default = "default_refresh_interval_secs")]
     refresh_interval_secs: u64,
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+impl Default for RawUiSection {
+    fn default() -> Self {
+        Self {
+            refresh_interval_secs: default_refresh_interval_secs(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawFiltersSection {
     #[serde(default = "default_ignored_filesystems")]
     ignored_filesystems: Vec<String>,
+}
+
+impl Default for RawFiltersSection {
+    fn default() -> Self {
+        Self {
+            ignored_filesystems: default_ignored_filesystems(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
