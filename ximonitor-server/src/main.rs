@@ -24,8 +24,8 @@ use tokio::time::interval;
 use tower_http::trace::TraceLayer;
 use tracing::{error, info, warn};
 use ximonitor_proto::{
-    HelloMessage, MetricsMessage, NodeIdentity, PingMessage, PongMessage, ServerConfig,
-    ServerNoticeMessage, WireMessage, parse_server_config,
+    HelloMessage, MetricsMessage, NodeIdentity, NodeSnapshot, PingMessage, PongMessage,
+    ServerConfig, ServerNoticeMessage, WireMessage, parse_server_config,
 };
 
 use crate::history::HistoryStore;
@@ -261,6 +261,7 @@ async fn handle_socket(state: AppState, mut socket: WebSocket) -> Result<(), Pro
                     ParsedFrame::Close => break Ok(()),
                     ParsedFrame::Control => continue,
                     ParsedFrame::Wire(WireMessage::Metrics(MetricsMessage { snapshot })) => {
+                        let snapshot = sanitize_snapshot(shared.config(), snapshot);
                         if !shared.update_snapshot(&node_id, session_id, snapshot).await {
                             warn!(node_id = %node_id, session_id, "dropping metrics from superseded session");
                             break Ok(());
@@ -422,6 +423,16 @@ async fn restore_snapshot_if_available(shared: &SharedState, path: &Path) {
             warn!(error = ?error, path = %path.display(), "failed to restore snapshot; continuing with empty state");
         }
     }
+}
+
+fn sanitize_snapshot(config: &ServerConfig, mut snapshot: NodeSnapshot) -> NodeSnapshot {
+    snapshot.disks.retain(|disk| {
+        !config
+            .ignored_filesystems
+            .iter()
+            .any(|fs| fs == &disk.fs_type)
+    });
+    snapshot
 }
 
 fn init_tracing() {

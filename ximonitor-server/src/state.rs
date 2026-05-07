@@ -287,6 +287,8 @@ impl Registry {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use chrono::{Duration as ChronoDuration, TimeZone, Utc};
     use ximonitor_proto::{LoadAverage, MemoryUsage, NodeSnapshot};
     use ximonitor_proto::{NetworkCounters, percentage};
