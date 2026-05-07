@@ -1,0 +1,112 @@
+use serde::{Deserialize, Serialize};
+
+use crate::model::{NodeIdentity, NodeSnapshot};
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum WireMessage {
+    Hello(HelloMessage),
+    Metrics(MetricsMessage),
+    Ping(PingMessage),
+    Pong(PongMessage),
+    ServerNotice(ServerNoticeMessage),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HelloMessage {
+    pub token: String,
+    pub identity: NodeIdentity,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MetricsMessage {
+    pub snapshot: NodeSnapshot,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PingMessage {
+    pub nonce: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PongMessage {
+    pub nonce: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ServerNoticeMessage {
+    pub level: NoticeLevel,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum NoticeLevel {
+    Info,
+    Warn,
+    Error,
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::{TimeZone, Utc};
+
+    use super::{HelloMessage, NoticeLevel, ServerNoticeMessage, WireMessage};
+    use crate::model::{LoadAverage, MemoryUsage, NetworkCounters, NodeIdentity, NodeSnapshot};
+
+    #[test]
+    fn round_trips_wire_messages() {
+        let identity = NodeIdentity {
+            node_id: "hk-01".to_string(),
+            node_label: "Hong Kong 01".to_string(),
+            hostname: "hk-01".to_string(),
+            os: "linux".to_string(),
+            kernel_version: Some("6.6.1".to_string()),
+            cpu_model: Some("AMD EPYC".to_string()),
+            cpu_cores: 8,
+            agent_version: "0.1.0".to_string(),
+            boot_time: Some(Utc.with_ymd_and_hms(2026, 5, 7, 0, 0, 0).unwrap()),
+            tags: vec!["apac".to_string()],
+        };
+        let hello = WireMessage::Hello(HelloMessage {
+            token: "token".to_string(),
+            identity: identity.clone(),
+        });
+        let snapshot = WireMessage::Metrics(super::MetricsMessage {
+            snapshot: NodeSnapshot {
+                collected_at: Utc.with_ymd_and_hms(2026, 5, 7, 1, 0, 0).unwrap(),
+                cpu_usage_percent: 42.5,
+                load: LoadAverage {
+                    one: 0.3,
+                    five: 0.4,
+                    fifteen: 0.5,
+                },
+                memory: MemoryUsage {
+                    total_bytes: 1024,
+                    used_bytes: 512,
+                    available_bytes: 256,
+                    swap_total_bytes: 2048,
+                    swap_used_bytes: 128,
+                },
+                uptime_secs: 3600,
+                disks: Vec::new(),
+                network: NetworkCounters {
+                    total_rx_bytes: 100,
+                    total_tx_bytes: 200,
+                    rx_bytes_per_sec: Some(10.0),
+                    tx_bytes_per_sec: Some(20.0),
+                },
+            },
+        });
+        let notice = WireMessage::ServerNotice(ServerNoticeMessage {
+            level: NoticeLevel::Warn,
+            message: "careful".to_string(),
+        });
+
+        for message in [hello, snapshot, notice] {
+            let encoded = serde_json::to_string(&message).expect("encode");
+            let decoded: WireMessage = serde_json::from_str(&encoded).expect("decode");
+            assert_eq!(message, decoded);
+        }
+    }
+}
