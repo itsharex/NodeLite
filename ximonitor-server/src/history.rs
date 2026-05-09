@@ -280,10 +280,11 @@ fn build_history_point(status: &NodeStatus) -> Option<HistoryPoint> {
     let used_disk_bytes: u64 = snapshot.disks.iter().map(|disk| disk.used_bytes).sum();
     let disk_used_percent =
         (total_disk_bytes > 0).then(|| percentage(used_disk_bytes, total_disk_bytes));
+    let recorded_at = status.last_seen.unwrap_or_else(Utc::now);
 
     Some(HistoryPoint {
         node_id: status.identity.node_id.clone(),
-        recorded_at: snapshot.collected_at,
+        recorded_at,
         cpu_usage_percent: snapshot.cpu_usage_percent,
         memory_used_percent: snapshot.memory.used_percent(),
         rx_bytes_per_sec: snapshot.network.rx_bytes_per_sec,
@@ -291,4 +292,63 @@ fn build_history_point(status: &NodeStatus) -> Option<HistoryPoint> {
         latency_ms: status.latency_ms,
         disk_used_percent,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::{Duration, Utc};
+    use ximonitor_proto::{
+        LoadAverage, MemoryUsage, NetworkCounters, NodeIdentity, NodeSnapshot, NodeStatus,
+    };
+
+    use super::build_history_point;
+
+    #[test]
+    fn history_point_uses_server_last_seen_timestamp() {
+        let now = Utc::now();
+        let status = NodeStatus {
+            identity: NodeIdentity {
+                node_id: "hk-01".to_string(),
+                node_label: "Hong Kong 01".to_string(),
+                hostname: "hk-01.internal".to_string(),
+                os: "Ubuntu".to_string(),
+                kernel_version: None,
+                cpu_model: None,
+                cpu_cores: 2,
+                agent_version: "0.1.0".to_string(),
+                boot_time: None,
+                tags: vec!["edge".to_string()],
+            },
+            snapshot: Some(NodeSnapshot {
+                collected_at: now + Duration::hours(24),
+                cpu_usage_percent: 42.0,
+                load: LoadAverage {
+                    one: 0.1,
+                    five: 0.2,
+                    fifteen: 0.3,
+                },
+                memory: MemoryUsage {
+                    total_bytes: 1024,
+                    used_bytes: 512,
+                    available_bytes: 512,
+                    swap_total_bytes: 0,
+                    swap_used_bytes: 0,
+                },
+                uptime_secs: 60,
+                disks: Vec::new(),
+                network: NetworkCounters {
+                    total_rx_bytes: 1,
+                    total_tx_bytes: 2,
+                    rx_bytes_per_sec: Some(3.0),
+                    tx_bytes_per_sec: Some(4.0),
+                },
+            }),
+            last_seen: Some(now),
+            latency_ms: Some(12),
+            online: true,
+        };
+
+        let point = build_history_point(&status).expect("history point should exist");
+        assert_eq!(point.recorded_at, now);
+    }
 }
