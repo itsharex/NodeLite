@@ -97,7 +97,7 @@ enum ProtocolError {
 
 #[derive(Debug)]
 enum ParsedFrame {
-    Wire(WireMessage),
+    Wire(Box<WireMessage>),
     Control,
     Close,
 }
@@ -457,41 +457,43 @@ async fn handle_socket(state: AppState, mut socket: WebSocket) -> Result<(), Pro
                     match parse_wire_message(frame)? {
                         ParsedFrame::Close => break Ok(()),
                         ParsedFrame::Control => continue,
-                        ParsedFrame::Wire(WireMessage::Metrics(MetricsMessage { snapshot })) => {
-                            if !state.registry.is_token_current(&node_id, &session_token).await {
-                                warn!(node_id = %node_id, "disconnecting session after registry token change");
-                                break Ok(());
+                        ParsedFrame::Wire(message) => match *message {
+                            WireMessage::Metrics(MetricsMessage { snapshot }) => {
+                                if !state.registry.is_token_current(&node_id, &session_token).await {
+                                    warn!(node_id = %node_id, "disconnecting session after registry token change");
+                                    break Ok(());
+                                }
+                                let snapshot = sanitize_snapshot(shared.config(), snapshot);
+                                let Some(status) = shared.update_snapshot(&node_id, session_id, snapshot).await else {
+                                    warn!(node_id = %node_id, session_id, "dropping metrics from superseded session");
+                                    break Ok(());
+                                };
+                                state.history.record_status(&status).await;
                             }
-                            let snapshot = sanitize_snapshot(shared.config(), snapshot);
-                            let Some(status) = shared.update_snapshot(&node_id, session_id, snapshot).await else {
-                                warn!(node_id = %node_id, session_id, "dropping metrics from superseded session");
-                                break Ok(());
-                            };
-                            state.history.record_status(&status).await;
-                        }
-                        ParsedFrame::Wire(WireMessage::Pong(PongMessage { nonce })) => {
-                            if !state.registry.is_token_current(&node_id, &session_token).await {
-                                warn!(node_id = %node_id, "disconnecting session after registry token change");
-                                break Ok(());
+                            WireMessage::Pong(PongMessage { nonce }) => {
+                                if !state.registry.is_token_current(&node_id, &session_token).await {
+                                    warn!(node_id = %node_id, "disconnecting session after registry token change");
+                                    break Ok(());
+                                }
+                                let Some(sent_at) = outstanding_pings.remove(&nonce) else {
+                                    continue;
+                                };
+                                let latency_ms = sent_at.elapsed().as_millis() as u64;
+                                if !shared.update_latency(&node_id, session_id, latency_ms).await {
+                                    warn!(node_id = %node_id, session_id, "dropping pong from superseded session");
+                                    break Ok(());
+                                }
                             }
-                            let Some(sent_at) = outstanding_pings.remove(&nonce) else {
-                                continue;
-                            };
-                            let latency_ms = sent_at.elapsed().as_millis() as u64;
-                            if !shared.update_latency(&node_id, session_id, latency_ms).await {
-                                warn!(node_id = %node_id, session_id, "dropping pong from superseded session");
-                                break Ok(());
+                            WireMessage::Hello(_) => {
+                                break Err(ProtocolError::Client("duplicate hello message".to_string()));
                             }
-                        }
-                        ParsedFrame::Wire(WireMessage::Hello(_)) => {
-                            break Err(ProtocolError::Client("duplicate hello message".to_string()));
-                        }
-                        ParsedFrame::Wire(WireMessage::Ping(_)) => {
-                            break Err(ProtocolError::Client("agent must not send ping messages".to_string()));
-                        }
-                        ParsedFrame::Wire(WireMessage::ServerNotice(_)) => {
-                            break Err(ProtocolError::Client("agent must not send server_notice messages".to_string()));
-                        }
+                            WireMessage::Ping(_) => {
+                                break Err(ProtocolError::Client("agent must not send ping messages".to_string()));
+                            }
+                            WireMessage::ServerNotice(_) => {
+                                break Err(ProtocolError::Client("agent must not send server_notice messages".to_string()));
+                            }
+                        },
                     }
                 }
                 _ = ping_ticker.tick() => {
@@ -540,12 +542,14 @@ async fn recv_hello(socket: &mut WebSocket) -> Result<HelloMessage, ProtocolErro
 
         match parse_wire_message(message)? {
             ParsedFrame::Control => continue,
-            ParsedFrame::Wire(WireMessage::Hello(hello)) => return Ok(hello),
-            ParsedFrame::Wire(_) => {
-                return Err(ProtocolError::Client(
-                    "first websocket message must be hello".to_string(),
-                ));
-            }
+            ParsedFrame::Wire(message) => match *message {
+                WireMessage::Hello(hello) => return Ok(hello),
+                _ => {
+                    return Err(ProtocolError::Client(
+                        "first websocket message must be hello".to_string(),
+                    ));
+                }
+            },
             ParsedFrame::Close => {
                 return Err(ProtocolError::Client(
                     "connection closed before hello message".to_string(),
@@ -558,6 +562,7 @@ async fn recv_hello(socket: &mut WebSocket) -> Result<HelloMessage, ProtocolErro
 fn parse_wire_message(message: Message) -> Result<ParsedFrame, ProtocolError> {
     match message {
         Message::Text(text) => serde_json::from_str::<WireMessage>(&text)
+            .map(Box::new)
             .map(ParsedFrame::Wire)
             .map_err(|error| ProtocolError::Client(format!("invalid websocket json: {error}"))),
         Message::Binary(_) => Err(ProtocolError::Client(
