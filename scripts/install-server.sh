@@ -8,6 +8,7 @@ LISTEN_HOST_DEFAULT="127.0.0.1"
 SERVICE_NAME="ximonitor-server"
 BIN_PATH="/usr/local/bin/ximonitor-server"
 UNIT_PATH="/etc/systemd/system/${SERVICE_NAME}.service"
+MODE="${XIMONITOR_SERVER_MODE:-auto}"
 
 TMP_BIN=""
 TMP_SHA256=""
@@ -64,6 +65,23 @@ prompt_required() {
       return 0
     fi
     printf '%s\n' "This field is required." >/dev/tty
+  done
+}
+
+prompt_mode() {
+  default_value="$1"
+
+  while :; do
+    value="$(read_line "Operation mode (install/upgrade)" "$default_value")"
+    case "$value" in
+      install|upgrade)
+        printf '%s' "$value"
+        return 0
+        ;;
+      *)
+        printf '%s\n' "Please enter install or upgrade." >/dev/tty
+        ;;
+    esac
   done
 }
 
@@ -179,6 +197,104 @@ validate_no_whitespace() {
   esac
 }
 
+detect_existing_install_root() {
+  if [ -r "$UNIT_PATH" ]; then
+    awk -F= '/^WorkingDirectory=/{print $2; exit}' "$UNIT_PATH"
+    return 0
+  fi
+
+  printf '%s' ""
+}
+
+toml_get_raw() {
+  file="$1"
+  section="$2"
+  key="$3"
+
+  awk -v section="[$section]" -v key="$key" '
+    /^\[/ {
+      in_section = ($0 == section)
+      next
+    }
+    in_section {
+      line = $0
+      sub(/^[[:space:]]+/, "", line)
+      if (line ~ "^" key "[[:space:]]*=") {
+        sub(/^[^=]+=[[:space:]]*/, "", line)
+        print line
+        exit
+      }
+    }
+  ' "$file"
+}
+
+trim_whitespace() {
+  printf '%s' "$1" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
+}
+
+strip_toml_string_quotes() {
+  value="$(trim_whitespace "$1")"
+  case "$value" in
+    \"*\")
+      value="${value#\"}"
+      value="${value%\"}"
+      ;;
+  esac
+  printf '%s' "$value"
+}
+
+load_existing_server_defaults() {
+  [ -f "$CONFIG_PATH" ] || return 0
+
+  listen_value="$(strip_toml_string_quotes "$(toml_get_raw "$CONFIG_PATH" server listen)")"
+  if [ -n "$listen_value" ] && [ "$listen_value" != "${listen_value%:*}" ]; then
+    LISTEN_HOST_DEFAULT_VALUE="${listen_value%:*}"
+    LISTEN_PORT_DEFAULT_VALUE="${listen_value##*:}"
+  fi
+
+  public_base_url="$(strip_toml_string_quotes "$(toml_get_raw "$CONFIG_PATH" server public_base_url)")"
+  case "$public_base_url" in
+    http://*)
+      PUBLIC_SCHEME_DEFAULT_VALUE="http"
+      PUBLIC_HOST_DEFAULT_VALUE="${public_base_url#http://}"
+      ;;
+    https://*)
+      PUBLIC_SCHEME_DEFAULT_VALUE="https"
+      PUBLIC_HOST_DEFAULT_VALUE="${public_base_url#https://}"
+      ;;
+  esac
+
+  readonly_username="$(strip_toml_string_quotes "$(toml_get_raw "$CONFIG_PATH" auth username)")"
+  if [ -n "$readonly_username" ]; then
+    READONLY_USERNAME_DEFAULT_VALUE="$readonly_username"
+  fi
+  readonly_password="$(strip_toml_string_quotes "$(toml_get_raw "$CONFIG_PATH" auth password)")"
+  if [ -n "$readonly_password" ]; then
+    READONLY_PASSWORD_DEFAULT_VALUE="$readonly_password"
+  fi
+
+  value="$(trim_whitespace "$(toml_get_raw "$CONFIG_PATH" server stale_after_secs)")"
+  [ -n "$value" ] && SERVER_STALE_AFTER_SECS="$value"
+  value="$(trim_whitespace "$(toml_get_raw "$CONFIG_PATH" server ping_interval_secs)")"
+  [ -n "$value" ] && SERVER_PING_INTERVAL_SECS="$value"
+  value="$(trim_whitespace "$(toml_get_raw "$CONFIG_PATH" server max_message_bytes)")"
+  [ -n "$value" ] && SERVER_MAX_MESSAGE_BYTES="$value"
+  value="$(trim_whitespace "$(toml_get_raw "$CONFIG_PATH" ws max_total_connections)")"
+  [ -n "$value" ] && WS_MAX_TOTAL_CONNECTIONS="$value"
+  value="$(trim_whitespace "$(toml_get_raw "$CONFIG_PATH" ws max_connections_per_ip)")"
+  [ -n "$value" ] && WS_MAX_CONNECTIONS_PER_IP="$value"
+  value="$(trim_whitespace "$(toml_get_raw "$CONFIG_PATH" ws auth_fail_window_secs)")"
+  [ -n "$value" ] && WS_AUTH_FAIL_WINDOW_SECS="$value"
+  value="$(trim_whitespace "$(toml_get_raw "$CONFIG_PATH" ws auth_fail_max_attempts)")"
+  [ -n "$value" ] && WS_AUTH_FAIL_MAX_ATTEMPTS="$value"
+  value="$(trim_whitespace "$(toml_get_raw "$CONFIG_PATH" ws auth_block_secs)")"
+  [ -n "$value" ] && WS_AUTH_BLOCK_SECS="$value"
+  value="$(trim_whitespace "$(toml_get_raw "$CONFIG_PATH" ui refresh_interval_secs)")"
+  [ -n "$value" ] && UI_REFRESH_INTERVAL_SECS="$value"
+  value="$(trim_whitespace "$(toml_get_raw "$CONFIG_PATH" filters ignored_filesystems)")"
+  [ -n "$value" ] && IGNORED_FILESYSTEMS_RAW="$value"
+}
+
 render_server_config() {
   cat <<EOF
 [server]
@@ -187,26 +303,26 @@ public_base_url = "${PUBLIC_SCHEME}://${PUBLIC_HOST}"
 node_registry_path = "${CONFIG_DIR}/server.json"
 history_db_path = "${DATA_DIR}/history.sqlite3"
 snapshot_path = "${DATA_DIR}/snapshot.json"
-stale_after_secs = 20
-ping_interval_secs = 10
-max_message_bytes = 65536
+stale_after_secs = ${SERVER_STALE_AFTER_SECS}
+ping_interval_secs = ${SERVER_PING_INTERVAL_SECS}
+max_message_bytes = ${SERVER_MAX_MESSAGE_BYTES}
 
 [auth]
 username = "${READONLY_USERNAME}"
 password = "${READONLY_PASSWORD}"
 
 [ws]
-max_total_connections = 1024
-max_connections_per_ip = 32
-auth_fail_window_secs = 300
-auth_fail_max_attempts = 12
-auth_block_secs = 900
+max_total_connections = ${WS_MAX_TOTAL_CONNECTIONS}
+max_connections_per_ip = ${WS_MAX_CONNECTIONS_PER_IP}
+auth_fail_window_secs = ${WS_AUTH_FAIL_WINDOW_SECS}
+auth_fail_max_attempts = ${WS_AUTH_FAIL_MAX_ATTEMPTS}
+auth_block_secs = ${WS_AUTH_BLOCK_SECS}
 
 [ui]
-refresh_interval_secs = 5
+refresh_interval_secs = ${UI_REFRESH_INTERVAL_SECS}
 
 [filters]
-ignored_filesystems = ["tmpfs", "devtmpfs", "overlay"]
+ignored_filesystems = ${IGNORED_FILESYSTEMS_RAW}
 EOF
 }
 
@@ -234,29 +350,76 @@ printf '%s\n' "XiMonitor Server Installer" >/dev/tty
 printf '%s\n' "This script installs the latest XiMonitor server release from GitHub." >/dev/tty
 printf '\n' >/dev/tty
 
+existing_install_root="$(detect_existing_install_root)"
+if [ -n "$existing_install_root" ]; then
+  INSTALL_ROOT_DEFAULT="$existing_install_root"
+fi
+
 INSTALL_ROOT="$(prompt_required "Install root directory" "$INSTALL_ROOT_DEFAULT")"
-LISTEN_HOST="$(prompt_required "Listen host" "$LISTEN_HOST_DEFAULT")"
-LISTEN_PORT="$(prompt_required "Listen port" "$(random_port)")"
-PUBLIC_HOST="$(prompt_required "Public domain or IP" "")"
-PUBLIC_SCHEME="$(prompt_required "Public scheme" "https")"
-READONLY_USERNAME="$(prompt_required "Readonly username" "viewer")"
-READONLY_PASSWORD="$(prompt_required "Readonly password" "$(random_hex 16)")"
 
 CONFIG_DIR="$INSTALL_ROOT/config"
 DATA_DIR="$INSTALL_ROOT/data"
 CONFIG_PATH="$CONFIG_DIR/server.toml"
 REGISTRY_PATH="$CONFIG_DIR/server.json"
 
-validate_port "$LISTEN_PORT"
-validate_scheme "$PUBLIC_SCHEME"
-validate_no_whitespace "install root directory" "$INSTALL_ROOT"
-validate_no_whitespace "public host" "$PUBLIC_HOST"
-
+existing_install=0
 if [ -e "$CONFIG_PATH" ] || [ -e "$UNIT_PATH" ] || [ -e "$BIN_PATH" ]; then
+  existing_install=1
+fi
+
+if [ "$MODE" = "auto" ]; then
+  if [ "$existing_install" -eq 1 ]; then
+    MODE="upgrade"
+  else
+    MODE="install"
+  fi
+fi
+
+MODE="$(prompt_mode "$MODE")"
+
+if [ "$MODE" = "upgrade" ] && [ "$existing_install" -ne 1 ]; then
+  fail "upgrade mode requires an existing XiMonitor server installation"
+fi
+
+if [ "$MODE" = "install" ] && [ "$existing_install" -eq 1 ]; then
   if ! confirm_default_no "Existing XiMonitor files detected. Overwrite them?"; then
     fail "aborted by user"
   fi
 fi
+
+SERVER_STALE_AFTER_SECS="20"
+SERVER_PING_INTERVAL_SECS="10"
+SERVER_MAX_MESSAGE_BYTES="65536"
+WS_MAX_TOTAL_CONNECTIONS="1024"
+WS_MAX_CONNECTIONS_PER_IP="32"
+WS_AUTH_FAIL_WINDOW_SECS="300"
+WS_AUTH_FAIL_MAX_ATTEMPTS="12"
+WS_AUTH_BLOCK_SECS="900"
+UI_REFRESH_INTERVAL_SECS="5"
+IGNORED_FILESYSTEMS_RAW='["tmpfs", "devtmpfs", "overlay"]'
+
+LISTEN_HOST_DEFAULT_VALUE="$LISTEN_HOST_DEFAULT"
+LISTEN_PORT_DEFAULT_VALUE="$(random_port)"
+PUBLIC_HOST_DEFAULT_VALUE=""
+PUBLIC_SCHEME_DEFAULT_VALUE="https"
+READONLY_USERNAME_DEFAULT_VALUE="viewer"
+READONLY_PASSWORD_DEFAULT_VALUE="$(random_hex 16)"
+
+if [ "$MODE" = "upgrade" ]; then
+  load_existing_server_defaults
+fi
+
+LISTEN_HOST="$(prompt_required "Listen host" "$LISTEN_HOST_DEFAULT_VALUE")"
+LISTEN_PORT="$(prompt_required "Listen port" "$LISTEN_PORT_DEFAULT_VALUE")"
+PUBLIC_HOST="$(prompt_required "Public domain or IP" "$PUBLIC_HOST_DEFAULT_VALUE")"
+PUBLIC_SCHEME="$(prompt_required "Public scheme" "$PUBLIC_SCHEME_DEFAULT_VALUE")"
+READONLY_USERNAME="$(prompt_required "Readonly username" "$READONLY_USERNAME_DEFAULT_VALUE")"
+READONLY_PASSWORD="$(prompt_required "Readonly password" "$READONLY_PASSWORD_DEFAULT_VALUE")"
+
+validate_port "$LISTEN_PORT"
+validate_scheme "$PUBLIC_SCHEME"
+validate_no_whitespace "install root directory" "$INSTALL_ROOT"
+validate_no_whitespace "public host" "$PUBLIC_HOST"
 
 ARCH="$(uname -m)"
 case "$ARCH" in
@@ -328,7 +491,11 @@ systemctl enable "$SERVICE_NAME.service"
 systemctl restart "$SERVICE_NAME.service"
 
 clear_screen
-printf '%s\n' "XiMonitor server installed and started." >/dev/tty
+if [ "$MODE" = "upgrade" ]; then
+  printf '%s\n' "XiMonitor server upgraded and restarted." >/dev/tty
+else
+  printf '%s\n' "XiMonitor server installed and started." >/dev/tty
+fi
 printf '%s\n' "Binary: $BIN_PATH" >/dev/tty
 printf '%s\n' "Config: $CONFIG_PATH" >/dev/tty
 printf '%s\n' "Registry: $REGISTRY_PATH" >/dev/tty
