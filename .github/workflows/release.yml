@@ -5,9 +5,18 @@ on:
     tags:
       - "*.*.*"
       - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to build and publish
+        required: true
+        type: string
 
 permissions:
   contents: write
+
+env:
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
   build:
@@ -23,6 +32,9 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: refs/tags/${{ env.RELEASE_TAG }}
 
       - name: Set up Rust
         run: |
@@ -78,15 +90,18 @@ jobs:
       - name: Create or update GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG_NAME: ${{ github.ref_name }}
+          GH_REPO: ${{ github.repository }}
+          TAG_NAME: ${{ env.RELEASE_TAG }}
         run: |
-          if ! gh release view "$TAG_NAME" >/dev/null 2>&1; then
+          if ! gh release view "$TAG_NAME" --repo "$GH_REPO" >/dev/null 2>&1; then
             gh release create "$TAG_NAME" \
+              --repo "$GH_REPO" \
               --title "XiMonitor $TAG_NAME" \
               --generate-notes
           fi
 
           gh release upload "$TAG_NAME" \
+            --repo "$GH_REPO" \
             release-assets/release-x86_64-unknown-linux-musl/ximonitor-server-x86_64-unknown-linux-musl \
             release-assets/release-x86_64-unknown-linux-musl/ximonitor-agent-x86_64-unknown-linux-musl \
             release-assets/release-aarch64-unknown-linux-musl/ximonitor-server-aarch64-unknown-linux-musl \
