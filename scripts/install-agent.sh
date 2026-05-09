@@ -11,12 +11,17 @@ need_cmd() {
   command -v "$1" >/dev/null 2>&1 || fail "missing required command: $1"
 }
 
+shell_quote() {
+  printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\"'\"'/g")"
+}
+
 BOOTSTRAP_URL=""
 INSTALL_TOKEN="${XIMONITOR_AGENT_INSTALL_TOKEN:-}"
 INSTALL_TOKEN_FILE="${XIMONITOR_AGENT_INSTALL_TOKEN_FILE:-}"
 INSTALL_DIR="/usr/local/bin"
 CONFIG_DIR="/etc/ximonitor"
 MODE="${XIMONITOR_AGENT_MODE:-auto}"
+AUTO_UPDATE="${XIMONITOR_AGENT_AUTO_UPDATE:-enable}"
 BASE_URL="${XIMONITOR_AGENT_BASE_URL:-https://github.com/XiNian-dada/XiMonitor/releases/latest/download}"
 CHECKSUMS_URL="${XIMONITOR_AGENT_CHECKSUMS_URL:-}"
 BINARY_URL="${XIMONITOR_AGENT_BINARY_URL:-}"
@@ -28,6 +33,9 @@ STATE_DIR="/var/lib/ximonitor-agent"
 BIN_PATH=""
 CONFIG_PATH=""
 UNIT_PATH="/etc/systemd/system/ximonitor-agent.service"
+AUTO_UPDATE_HELPER_PATH="/usr/local/bin/ximonitor-agent-auto-update"
+AUTO_UPDATE_SERVICE_PATH="/etc/systemd/system/ximonitor-agent-auto-update.service"
+AUTO_UPDATE_TIMER_PATH="/etc/systemd/system/ximonitor-agent-auto-update.timer"
 TMP_PATH=""
 BOOTSTRAP_TMP=""
 CURL_AUTH_CONFIG=""
@@ -198,6 +206,100 @@ resolve_release_base_url() {
   esac
 }
 
+derive_update_script_url() {
+  case "$UPDATE_BASE_URL" in
+    https://github.com/*/releases/latest/download)
+      printf '%s/install-agent.sh' "$UPDATE_BASE_URL"
+      return 0
+      ;;
+    https://github.com/*/releases/download/*)
+      releases_root="${UPDATE_BASE_URL%/download/*}"
+      printf '%s/latest/download/install-agent.sh' "$releases_root"
+      return 0
+      ;;
+    */latest/download)
+      printf '%s/install-agent.sh' "$UPDATE_BASE_URL"
+      return 0
+      ;;
+  esac
+
+  if [ -n "$BINARY_URL" ]; then
+    fail "auto-update with --binary-url requires a release base URL instead"
+  fi
+
+  printf '%s/install-agent.sh' "${UPDATE_BASE_URL%/}"
+}
+
+write_auto_update_helper() {
+  update_script_url="$1"
+
+  {
+    printf '%s\n' '#!/bin/sh'
+    printf '%s\n' 'set -eu'
+    printf 'curl -fsSL %s | \\\n' "$(shell_quote "$update_script_url")"
+    printf '%s\n' '  XIMONITOR_AGENT_MODE=upgrade \'
+    printf '%s\n' '  sh -s -- \'
+    printf '  --mode upgrade \\\n'
+    printf '  --install-dir %s \\\n' "$(shell_quote "$INSTALL_DIR")"
+    printf '  --config-dir %s \\\n' "$(shell_quote "$CONFIG_DIR")"
+    printf '  --base-url %s' "$(shell_quote "$UPDATE_BASE_URL")"
+    if [ -n "$CHECKSUMS_URL" ]; then
+      printf ' \\\n  --checksums-url %s' "$(shell_quote "$CHECKSUMS_URL")"
+    fi
+    if [ -n "$BINARY_URL" ]; then
+      printf ' \\\n  --binary-url %s' "$(shell_quote "$BINARY_URL")"
+    fi
+    printf '\n'
+  } >"$AUTO_UPDATE_HELPER_PATH"
+  chmod 0755 "$AUTO_UPDATE_HELPER_PATH"
+}
+
+configure_auto_update() {
+  case "$AUTO_UPDATE" in
+    enable)
+      update_script_url="$(derive_update_script_url)"
+      write_auto_update_helper "$update_script_url"
+
+      cat >"$AUTO_UPDATE_SERVICE_PATH" <<EOF
+[Unit]
+Description=XiMonitor Agent Auto Update
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=$AUTO_UPDATE_HELPER_PATH
+User=root
+Group=root
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+ReadWritePaths=$INSTALL_DIR $CONFIG_DIR $STATE_DIR /etc/systemd/system
+EOF
+
+      cat >"$AUTO_UPDATE_TIMER_PATH" <<'EOF'
+[Unit]
+Description=Run XiMonitor Agent auto-update daily
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+      ;;
+    disable)
+      rm -f "$AUTO_UPDATE_HELPER_PATH" "$AUTO_UPDATE_SERVICE_PATH" "$AUTO_UPDATE_TIMER_PATH"
+      ;;
+    *)
+      fail "auto-update must be enable or disable"
+      ;;
+  esac
+}
+
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --bootstrap-url)
@@ -235,6 +337,11 @@ while [ "$#" -gt 0 ]; do
       BASE_URL="$2"
       shift 2
       ;;
+    --auto-update)
+      [ "$#" -ge 2 ] || fail "--auto-update requires a value"
+      AUTO_UPDATE="$2"
+      shift 2
+      ;;
     --checksums-url)
       [ "$#" -ge 2 ] || fail "--checksums-url requires a value"
       CHECKSUMS_URL="$2"
@@ -268,6 +375,7 @@ Optional:
   --config-dir <dir>
   --mode <install|upgrade|auto>
   --base-url <release-base-url>
+  --auto-update <enable|disable>
   --checksums-url <release-checksums-url>
   --binary-url <exact-binary-url>
   --sha256-x86_64 <sha256-override>
@@ -314,6 +422,8 @@ case "$ARCH" in
     fail "unsupported architecture: $ARCH"
     ;;
 esac
+
+UPDATE_BASE_URL="$BASE_URL"
 
 if [ -n "$BINARY_URL" ]; then
   DOWNLOAD_URL="$BINARY_URL"
@@ -409,7 +519,16 @@ WantedBy=multi-user.target
 EOF
 
 systemctl daemon-reload
+configure_auto_update
+systemctl daemon-reload
 systemctl enable ximonitor-agent.service
+if [ "$AUTO_UPDATE" = "enable" ]; then
+  systemctl enable ximonitor-agent-auto-update.timer
+  systemctl restart ximonitor-agent-auto-update.timer
+else
+  systemctl disable --now ximonitor-agent-auto-update.timer >/dev/null 2>&1 || true
+  systemctl disable ximonitor-agent-auto-update.service >/dev/null 2>&1 || true
+fi
 systemctl restart ximonitor-agent.service
 
 if [ "$MODE" = "upgrade" ]; then
@@ -419,3 +538,6 @@ else
 fi
 printf '%s\n' "Config: $CONFIG_PATH"
 printf '%s\n' "Service: ximonitor-agent.service"
+if [ "$AUTO_UPDATE" = "enable" ]; then
+  printf '%s\n' "Auto-update timer: ximonitor-agent-auto-update.timer"
+fi
