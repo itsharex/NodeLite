@@ -68,11 +68,6 @@ impl SharedState {
         registry.is_current_session(node_id, session_id)
     }
 
-    pub async fn node_count(&self) -> usize {
-        let registry = self.registry.read().await;
-        registry.nodes.len()
-    }
-
     pub async fn list_statuses(&self) -> Vec<NodeStatus> {
         let registry = self.registry.read().await;
         registry.list_statuses()

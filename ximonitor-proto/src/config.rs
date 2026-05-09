@@ -37,7 +37,8 @@ impl std::error::Error for ConfigError {}
 pub struct ServerConfig {
     pub listen: SocketAddr,
     pub public_base_url: String,
-    pub shared_token: String,
+    pub shared_token: Option<String>,
+    pub node_registry_path: PathBuf,
     pub history_db_path: PathBuf,
     pub snapshot_path: PathBuf,
     pub stale_after_secs: u64,
@@ -45,6 +46,7 @@ pub struct ServerConfig {
     pub max_message_bytes: usize,
     pub refresh_interval_secs: u64,
     pub ignored_filesystems: Vec<String>,
+    pub agent_release_base_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -78,6 +80,8 @@ struct RawServerConfigFile {
     ui: RawUiSection,
     #[serde(default)]
     filters: RawFiltersSection,
+    #[serde(default)]
+    install: RawInstallSection,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -85,7 +89,10 @@ struct RawServerConfigFile {
 struct RawServerSection {
     listen: String,
     public_base_url: String,
-    shared_token: String,
+    #[serde(default)]
+    shared_token: Option<String>,
+    #[serde(default = "default_node_registry_path")]
+    node_registry_path: PathBuf,
     #[serde(default = "default_history_db_path")]
     history_db_path: PathBuf,
     #[serde(default = "default_snapshot_path")]
@@ -130,6 +137,20 @@ impl Default for RawFiltersSection {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct RawInstallSection {
+    agent_release_base_url: Option<String>,
+}
+
+impl Default for RawInstallSection {
+    fn default() -> Self {
+        Self {
+            agent_release_base_url: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RawAgentConfigFile {
     agent: RawAgentSection,
 }
@@ -160,7 +181,20 @@ impl RawServerConfigFile {
             &self.server.public_base_url,
             &["http", "https"],
         )?;
-        validate_non_empty("server.shared_token", &self.server.shared_token)?;
+        let shared_token = self
+            .server
+            .shared_token
+            .map(|value| value.trim().to_string());
+        if let Some(shared_token) = shared_token.as_deref() {
+            validate_non_empty("server.shared_token", shared_token)?;
+        }
+        if let Some(agent_release_base_url) = self.install.agent_release_base_url.as_deref() {
+            validate_url(
+                "install.agent_release_base_url",
+                agent_release_base_url,
+                &["http", "https"],
+            )?;
+        }
 
         if self.server.stale_after_secs < 5 {
             return Err(ConfigError::new(
@@ -186,7 +220,8 @@ impl RawServerConfigFile {
         Ok(ServerConfig {
             listen,
             public_base_url: self.server.public_base_url,
-            shared_token: self.server.shared_token,
+            shared_token,
+            node_registry_path: self.server.node_registry_path,
             history_db_path: self.server.history_db_path,
             snapshot_path: self.server.snapshot_path,
             stale_after_secs: self.server.stale_after_secs,
@@ -194,6 +229,7 @@ impl RawServerConfigFile {
             max_message_bytes: self.server.max_message_bytes,
             refresh_interval_secs: self.ui.refresh_interval_secs,
             ignored_filesystems: normalize_string_list(self.filters.ignored_filesystems),
+            agent_release_base_url: self.install.agent_release_base_url,
         })
     }
 }
@@ -282,6 +318,10 @@ fn default_history_db_path() -> PathBuf {
     PathBuf::from("./data/history.sqlite3")
 }
 
+fn default_node_registry_path() -> PathBuf {
+    PathBuf::from("./config/server.json")
+}
+
 fn default_snapshot_path() -> PathBuf {
     PathBuf::from("./data/snapshot.json")
 }
@@ -316,6 +356,8 @@ fn default_ignored_filesystems() -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::{DEFAULT_MAX_MESSAGE_BYTES, parse_agent_config, parse_server_config};
 
     #[test]
@@ -325,14 +367,17 @@ mod tests {
             [server]
             listen = "127.0.0.1:8080"
             public_base_url = "http://127.0.0.1:8080"
-            shared_token = "token"
             "#,
         )
         .expect("server config should parse");
 
         assert_eq!(config.listen.to_string(), "127.0.0.1:8080");
-        assert_eq!(config.shared_token, "token");
+        assert_eq!(config.shared_token, None);
         assert_eq!(config.max_message_bytes, DEFAULT_MAX_MESSAGE_BYTES);
+        assert_eq!(
+            config.node_registry_path,
+            PathBuf::from("./config/server.json")
+        );
         assert_eq!(
             config.ignored_filesystems,
             vec!["devtmpfs", "overlay", "tmpfs"]
@@ -346,7 +391,6 @@ mod tests {
             [server]
             listen = "oops"
             public_base_url = "http://127.0.0.1:8080"
-            shared_token = "token"
             "#,
         )
         .expect_err("invalid config should fail");
@@ -389,5 +433,32 @@ mod tests {
         assert_eq!(config.node_id, "hk-01");
         assert_eq!(config.report_interval_secs, 7);
         assert_eq!(config.tags, vec!["apac", "edge"]);
+    }
+
+    #[test]
+    fn parses_server_config_with_install_and_legacy_token() {
+        let config = parse_server_config(
+            r#"
+            [server]
+            listen = "127.0.0.1:8080"
+            public_base_url = "https://monitor.example.com"
+            shared_token = "legacy-token"
+            node_registry_path = "/etc/ximonitor/server.json"
+
+            [install]
+            agent_release_base_url = "https://downloads.example.com/ximonitor/releases/latest/download"
+            "#,
+        )
+        .expect("server config should parse");
+
+        assert_eq!(config.shared_token.as_deref(), Some("legacy-token"));
+        assert_eq!(
+            config.node_registry_path,
+            PathBuf::from("/etc/ximonitor/server.json")
+        );
+        assert_eq!(
+            config.agent_release_base_url.as_deref(),
+            Some("https://downloads.example.com/ximonitor/releases/latest/download")
+        );
     }
 }

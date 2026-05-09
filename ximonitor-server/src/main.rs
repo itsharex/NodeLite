@@ -1,4 +1,5 @@
 mod history;
+mod registry;
 mod snapshot;
 mod state;
 mod ui;
@@ -11,11 +12,11 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, anyhow};
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path as AxumPath, State};
-use axum::http::StatusCode;
+use axum::http::{StatusCode, header};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use futures::{SinkExt, StreamExt};
 use serde::Serialize;
 use tokio::fs;
@@ -24,11 +25,15 @@ use tokio::time::interval;
 use tower_http::trace::TraceLayer;
 use tracing::{error, info, warn};
 use ximonitor_proto::{
-    HelloMessage, MetricsMessage, NodeIdentity, NodeSnapshot, PingMessage, PongMessage,
-    ServerConfig, ServerNoticeMessage, WireMessage, parse_server_config,
+    HelloMessage, MetricsMessage, NodeSnapshot, PingMessage, PongMessage, ServerConfig,
+    ServerNoticeMessage, WireMessage, parse_server_config,
 };
 
 use crate::history::HistoryStore;
+use crate::registry::{
+    IssueNodeRequest, NodeRegistry, build_install_script_url, issue_node, render_agent_config,
+    render_install_command,
+};
 use crate::snapshot::{load_snapshot, spawn_snapshot_persistor};
 use crate::state::SharedState;
 use crate::ui::{index_html, node_html};
@@ -37,13 +42,33 @@ use crate::ui::{index_html, node_html};
 #[command(name = "ximonitor-server")]
 #[command(about = "XiMonitor central server")]
 struct Cli {
-    #[arg(long, default_value = "config/server.toml")]
+    #[arg(long, global = true, default_value = "config/server.toml")]
     config: PathBuf,
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+#[derive(Debug, Subcommand)]
+enum Command {
+    IssueNode(IssueNodeArgs),
+}
+
+#[derive(Debug, Parser)]
+struct IssueNodeArgs {
+    #[arg(long)]
+    node_id: String,
+    #[arg(long)]
+    node_label: Option<String>,
+    #[arg(long = "tag")]
+    tags: Vec<String>,
+    #[arg(long)]
+    rotate_token: bool,
 }
 
 #[derive(Clone)]
 struct AppState {
     history: HistoryStore,
+    registry: NodeRegistry,
     shared: SharedState,
 }
 
@@ -69,6 +94,10 @@ enum ParsedFrame {
     Close,
 }
 
+const INSTALL_AGENT_SCRIPT: &str = include_str!("../../scripts/install-agent.sh");
+const HELLO_TIMEOUT_SECS: u64 = 10;
+const MAX_OUTSTANDING_PINGS: usize = 32;
+
 impl From<anyhow::Error> for ProtocolError {
     fn from(error: anyhow::Error) -> Self {
         Self::Server(error)
@@ -80,10 +109,28 @@ async fn main() -> Result<()> {
     init_tracing();
 
     let cli = Cli::parse();
-    let config = Arc::new(load_server_config(&cli.config).await?);
+    match cli.command {
+        Some(Command::IssueNode(args)) => issue_node_command(cli.config.as_path(), args).await,
+        None => run_server(cli.config.as_path()).await,
+    }
+}
+
+async fn run_server(config_path: &Path) -> Result<()> {
+    let config = Arc::new(load_server_config(config_path).await?);
     let listen_addr = config.listen;
     let public_base_url = config.public_base_url.clone();
     let refresh_interval_secs = config.refresh_interval_secs;
+    let registry = NodeRegistry::load(
+        config.node_registry_path.as_path(),
+        config.shared_token.clone(),
+    )
+    .await
+    .with_context(|| {
+        format!(
+            "failed to load node registry {}",
+            config.node_registry_path.display()
+        )
+    })?;
     let shared = SharedState::new(Arc::clone(&config));
     let history = HistoryStore::new(config.history_db_path.clone());
     history.initialize().await;
@@ -92,11 +139,29 @@ async fn main() -> Result<()> {
     spawn_stale_reaper(shared.clone());
     spawn_snapshot_persistor(shared.clone(), config.snapshot_path.clone());
 
-    let state = AppState { history, shared };
+    if registry.uses_legacy_shared_token() {
+        warn!(
+            registry_path = %config.node_registry_path.display(),
+            "legacy shared_token authentication is still enabled; migrate agents to per-node tokens in the registry file",
+        );
+    }
+
+    info!(
+        registry_path = %config.node_registry_path.display(),
+        enrolled_nodes = registry.count(),
+        "node registry loaded",
+    );
+
+    let state = AppState {
+        history,
+        registry,
+        shared,
+    };
     let app = Router::new()
         .route("/", get(index))
         .route("/nodes/{node_id}", get(node_detail))
         .route("/healthz", get(healthz))
+        .route("/install/install-agent.sh", get(install_agent_script))
         .route("/api/bootstrap", get(bootstrap))
         .route("/api/overview", get(overview))
         .route("/api/nodes", get(nodes))
@@ -120,6 +185,55 @@ async fn main() -> Result<()> {
     axum::serve(listener, app)
         .await
         .context("server exited unexpectedly")
+}
+
+async fn issue_node_command(config_path: &Path, args: IssueNodeArgs) -> Result<()> {
+    let config = load_server_config(config_path).await?;
+    let issued = issue_node(
+        config.node_registry_path.as_path(),
+        IssueNodeRequest {
+            node_id: args.node_id,
+            node_label: args.node_label,
+            tags: args.tags,
+            rotate_token: args.rotate_token,
+        },
+    )
+    .await?;
+
+    let install_command = render_install_command(
+        &config.public_base_url,
+        &issued.node,
+        config.agent_release_base_url.as_deref(),
+    )?;
+    let agent_config = render_agent_config(&config.public_base_url, &issued.node)?;
+    let install_script_url = build_install_script_url(&config.public_base_url)?;
+    let action = if issued.created {
+        "created"
+    } else if issued.rotated_token {
+        "rotated"
+    } else {
+        "reused"
+    };
+
+    println!("node_id: {}", issued.node.node_id);
+    println!("node_label: {}", issued.node.node_label);
+    println!("status: {action}");
+    println!("registry_path: {}", config.node_registry_path.display());
+    println!("install_script_url: {install_script_url}");
+    println!();
+    println!("# agent.toml");
+    println!("{agent_config}");
+    println!("# install command");
+    println!("{install_command}");
+
+    if config.agent_release_base_url.is_none() {
+        println!();
+        println!(
+            "note: set [install].agent_release_base_url in server.toml to print a fully self-contained install command."
+        );
+    }
+
+    Ok(())
 }
 
 async fn load_server_config(path: &Path) -> Result<ServerConfig> {
@@ -173,8 +287,15 @@ async fn bootstrap(State(state): State<AppState>) -> impl IntoResponse {
         status: "ok",
         public_base_url: state.shared.config().public_base_url.clone(),
         refresh_interval_secs: state.shared.config().refresh_interval_secs,
-        registered_nodes: state.shared.node_count().await,
+        registered_nodes: state.registry.count(),
     })
+}
+
+async fn install_agent_script() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "text/x-shellscript; charset=utf-8")],
+        INSTALL_AGENT_SCRIPT,
+    )
 }
 
 async fn overview(State(state): State<AppState>) -> impl IntoResponse {
@@ -228,85 +349,98 @@ async fn ws_handler(State(state): State<AppState>, ws: WebSocketUpgrade) -> impl
 
 async fn handle_socket(state: AppState, mut socket: WebSocket) -> Result<(), ProtocolError> {
     let shared = state.shared.clone();
-    let hello = recv_hello(&mut socket).await?;
-    validate_hello(shared.config(), &hello)?;
+    let hello = tokio::time::timeout(
+        Duration::from_secs(HELLO_TIMEOUT_SECS),
+        recv_hello(&mut socket),
+    )
+    .await
+    .map_err(|_| ProtocolError::Client("timed out waiting for hello message".to_string()))??;
+    let identity = state
+        .registry
+        .authorize(&hello.identity, &hello.token)
+        .map_err(|error| ProtocolError::Client(error.to_string()))?;
 
-    let node_id = hello.identity.node_id.clone();
-    let node_label = hello.identity.node_label.clone();
-    let session_id = shared.register_node(hello.identity).await;
+    let node_id = identity.node_id.clone();
+    let node_label = identity.node_label.clone();
+    let session_id = shared.register_node(identity).await;
 
     info!(node_id = %node_id, node_label = %node_label, session_id, "node authenticated");
 
-    let notice = WireMessage::ServerNotice(ServerNoticeMessage {
-        level: ximonitor_proto::NoticeLevel::Info,
-        message: "authenticated".to_string(),
-    });
-    send_wire_message(&mut socket, &notice).await?;
+    let session_result: Result<(), ProtocolError> = async {
+        let notice = WireMessage::ServerNotice(ServerNoticeMessage {
+            level: ximonitor_proto::NoticeLevel::Info,
+            message: "authenticated".to_string(),
+        });
+        send_wire_message(&mut socket, &notice).await?;
 
-    let (mut sender, mut receiver) = socket.split();
-    let ping_every = Duration::from_secs(shared.config().ping_interval_secs);
-    let mut ping_ticker = interval(ping_every);
-    let mut outstanding_pings: HashMap<u64, Instant> = HashMap::new();
-    let mut next_ping_nonce = 1_u64;
+        let (mut sender, mut receiver) = socket.split();
+        let ping_every = Duration::from_secs(shared.config().ping_interval_secs);
+        let ping_expiry = Duration::from_secs(shared.config().ping_interval_secs.saturating_mul(3));
+        let mut ping_ticker = interval(ping_every);
+        let mut outstanding_pings: HashMap<u64, Instant> = HashMap::new();
+        let mut next_ping_nonce = 1_u64;
 
-    let session_result: Result<(), ProtocolError> = loop {
-        tokio::select! {
-            incoming = receiver.next() => {
-                let Some(frame) = incoming else {
-                    break Ok(());
-                };
-                let frame = frame.map_err(|error| anyhow!("websocket receive failed: {error}"))?;
+        loop {
+            tokio::select! {
+                incoming = receiver.next() => {
+                    let Some(frame) = incoming else {
+                        break Ok(());
+                    };
+                    let frame = frame.map_err(|error| anyhow!("websocket receive failed: {error}"))?;
 
-                match parse_wire_message(frame)? {
-                    ParsedFrame::Close => break Ok(()),
-                    ParsedFrame::Control => continue,
-                    ParsedFrame::Wire(WireMessage::Metrics(MetricsMessage { snapshot })) => {
-                        let snapshot = sanitize_snapshot(shared.config(), snapshot);
-                        let Some(status) = shared.update_snapshot(&node_id, session_id, snapshot).await else {
-                            warn!(node_id = %node_id, session_id, "dropping metrics from superseded session");
-                            break Ok(());
-                        };
-                        state.history.record_status(&status).await;
-                    }
-                    ParsedFrame::Wire(WireMessage::Pong(PongMessage { nonce })) => {
-                        let Some(sent_at) = outstanding_pings.remove(&nonce) else {
-                            continue;
-                        };
-                        let latency_ms = sent_at.elapsed().as_millis() as u64;
-                        if !shared.update_latency(&node_id, session_id, latency_ms).await {
-                            warn!(node_id = %node_id, session_id, "dropping pong from superseded session");
-                            break Ok(());
+                    match parse_wire_message(frame)? {
+                        ParsedFrame::Close => break Ok(()),
+                        ParsedFrame::Control => continue,
+                        ParsedFrame::Wire(WireMessage::Metrics(MetricsMessage { snapshot })) => {
+                            let snapshot = sanitize_snapshot(shared.config(), snapshot);
+                            let Some(status) = shared.update_snapshot(&node_id, session_id, snapshot).await else {
+                                warn!(node_id = %node_id, session_id, "dropping metrics from superseded session");
+                                break Ok(());
+                            };
+                            state.history.record_status(&status).await;
+                        }
+                        ParsedFrame::Wire(WireMessage::Pong(PongMessage { nonce })) => {
+                            let Some(sent_at) = outstanding_pings.remove(&nonce) else {
+                                continue;
+                            };
+                            let latency_ms = sent_at.elapsed().as_millis() as u64;
+                            if !shared.update_latency(&node_id, session_id, latency_ms).await {
+                                warn!(node_id = %node_id, session_id, "dropping pong from superseded session");
+                                break Ok(());
+                            }
+                        }
+                        ParsedFrame::Wire(WireMessage::Hello(_)) => {
+                            break Err(ProtocolError::Client("duplicate hello message".to_string()));
+                        }
+                        ParsedFrame::Wire(WireMessage::Ping(_)) => {
+                            break Err(ProtocolError::Client("agent must not send ping messages".to_string()));
+                        }
+                        ParsedFrame::Wire(WireMessage::ServerNotice(_)) => {
+                            break Err(ProtocolError::Client("agent must not send server_notice messages".to_string()));
                         }
                     }
-                    ParsedFrame::Wire(WireMessage::Hello(_)) => {
-                        break Err(ProtocolError::Client("duplicate hello message".to_string()));
-                    }
-                    ParsedFrame::Wire(WireMessage::Ping(_)) => {
-                        break Err(ProtocolError::Client("agent must not send ping messages".to_string()));
-                    }
-                    ParsedFrame::Wire(WireMessage::ServerNotice(_)) => {
-                        break Err(ProtocolError::Client("agent must not send server_notice messages".to_string()));
-                    }
                 }
-            }
-            _ = ping_ticker.tick() => {
-                if !shared.is_current_session(&node_id, session_id).await {
-                    warn!(node_id = %node_id, session_id, "closing superseded websocket session");
-                    break Ok(());
-                }
+                _ = ping_ticker.tick() => {
+                    if !shared.is_current_session(&node_id, session_id).await {
+                        warn!(node_id = %node_id, session_id, "closing superseded websocket session");
+                        break Ok(());
+                    }
 
-                let nonce = next_ping_nonce;
-                next_ping_nonce = next_ping_nonce.saturating_add(1);
-                outstanding_pings.insert(nonce, Instant::now());
-                let ping = serde_json::to_string(&WireMessage::Ping(PingMessage { nonce }))
-                    .map_err(|error| anyhow!("failed to serialize ping: {error}"))?;
-                sender
-                    .send(Message::Text(ping.into()))
-                    .await
-                    .map_err(|error| anyhow!("failed to send ping: {error}"))?;
+                    prune_outstanding_pings(&mut outstanding_pings, ping_expiry);
+                    let nonce = next_ping_nonce;
+                    next_ping_nonce = next_ping_nonce.saturating_add(1);
+                    outstanding_pings.insert(nonce, Instant::now());
+                    let ping = serde_json::to_string(&WireMessage::Ping(PingMessage { nonce }))
+                        .map_err(|error| anyhow!("failed to serialize ping: {error}"))?;
+                    sender
+                        .send(Message::Text(ping.into()))
+                        .await
+                        .map_err(|error| anyhow!("failed to send ping: {error}"))?;
+                }
             }
         }
-    };
+    }
+    .await;
 
     shared.mark_disconnected(&node_id, session_id).await;
     info!(node_id = %node_id, session_id, "node disconnected");
@@ -341,32 +475,6 @@ async fn recv_hello(socket: &mut WebSocket) -> Result<HelloMessage, ProtocolErro
             }
         }
     }
-}
-
-fn validate_hello(config: &ServerConfig, hello: &HelloMessage) -> Result<(), ProtocolError> {
-    if hello.token != config.shared_token {
-        return Err(ProtocolError::Client("invalid shared token".to_string()));
-    }
-    validate_identity(&hello.identity)
-}
-
-fn validate_identity(identity: &NodeIdentity) -> Result<(), ProtocolError> {
-    if identity.node_id.trim().is_empty() {
-        return Err(ProtocolError::Client(
-            "identity.node_id is empty".to_string(),
-        ));
-    }
-    if identity.node_label.trim().is_empty() {
-        return Err(ProtocolError::Client(
-            "identity.node_label is empty".to_string(),
-        ));
-    }
-    if identity.agent_version.trim().is_empty() {
-        return Err(ProtocolError::Client(
-            "identity.agent_version is empty".to_string(),
-        ));
-    }
-    Ok(())
 }
 
 fn parse_wire_message(message: Message) -> Result<ParsedFrame, ProtocolError> {
@@ -433,6 +541,22 @@ fn sanitize_snapshot(config: &ServerConfig, mut snapshot: NodeSnapshot) -> NodeS
     snapshot
 }
 
+fn prune_outstanding_pings(outstanding_pings: &mut HashMap<u64, Instant>, max_age: Duration) {
+    outstanding_pings.retain(|_, sent_at| sent_at.elapsed() < max_age);
+
+    if outstanding_pings.len() < MAX_OUTSTANDING_PINGS {
+        return;
+    }
+
+    if let Some(oldest_nonce) = outstanding_pings
+        .iter()
+        .min_by_key(|(_, sent_at)| *sent_at)
+        .map(|(nonce, _)| *nonce)
+    {
+        outstanding_pings.remove(&oldest_nonce);
+    }
+}
+
 fn init_tracing() {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -450,14 +574,17 @@ mod tests {
 
     use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
     use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     use axum::Router;
+    use tokio::runtime::Runtime;
 
     use super::{
-        AppState, bootstrap, healthz, index, node_detail, node_history, node_status, nodes,
-        overview, ws_handler,
+        AppState, bootstrap, healthz, index, install_agent_script, node_detail, node_history,
+        node_status, nodes, overview, ws_handler,
     };
     use crate::history::HistoryStore;
+    use crate::registry::NodeRegistry;
     use crate::state::SharedState;
     use axum::routing::get;
     use tower_http::trace::TraceLayer;
@@ -465,10 +592,17 @@ mod tests {
 
     #[test]
     fn router_builds_with_v08_path_syntax() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be monotonic enough")
+            .as_nanos();
+        let registry_path =
+            std::env::temp_dir().join(format!("ximonitor-router-test-{unique}.json"));
         let config = Arc::new(ServerConfig {
             listen: SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 8080)),
             public_base_url: "http://127.0.0.1:8080".to_string(),
-            shared_token: "token".to_string(),
+            shared_token: None,
+            node_registry_path: registry_path,
             history_db_path: PathBuf::from("./data/history.sqlite3"),
             snapshot_path: PathBuf::from("./data/snapshot.json"),
             stale_after_secs: 20,
@@ -476,9 +610,17 @@ mod tests {
             max_message_bytes: 65536,
             refresh_interval_secs: 5,
             ignored_filesystems: vec!["tmpfs".to_string()],
+            agent_release_base_url: None,
         });
+        let runtime = Runtime::new().expect("runtime should build");
         let state = AppState {
             history: HistoryStore::new(PathBuf::from("./data/history.sqlite3")),
+            registry: runtime
+                .block_on(NodeRegistry::load(
+                    config.node_registry_path.as_path(),
+                    config.shared_token.clone(),
+                ))
+                .expect("registry should load"),
             shared: SharedState::new(config),
         };
 
@@ -486,6 +628,7 @@ mod tests {
             .route("/", get(index))
             .route("/nodes/{node_id}", get(node_detail))
             .route("/healthz", get(healthz))
+            .route("/install/install-agent.sh", get(install_agent_script))
             .route("/api/bootstrap", get(bootstrap))
             .route("/api/overview", get(overview))
             .route("/api/nodes", get(nodes))
