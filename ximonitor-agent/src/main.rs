@@ -12,12 +12,15 @@ use tokio::time::sleep;
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message;
 use tracing::{info, warn};
+use url::Url;
 use ximonitor_proto::{
     AgentConfig, HelloMessage, MetricsMessage, NoticeLevel, PingMessage, PongMessage,
     ServerNoticeMessage, WireMessage, parse_agent_config,
 };
 
 use crate::collector::new_collector;
+
+const INSECURE_TRANSPORT_WARN_INTERVAL_SECS: u64 = 900;
 
 #[derive(Debug, Parser)]
 #[command(name = "ximonitor-agent")]
@@ -58,6 +61,7 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
+    spawn_insecure_transport_warning(config.server.clone());
     run_forever(config, collector, identity).await
 }
 
@@ -225,4 +229,67 @@ fn reconnect_delay(attempt: u32) -> Duration {
         _ => 60,
     };
     Duration::from_secs(seconds)
+}
+
+fn spawn_insecure_transport_warning(server_url: String) {
+    if !uses_insecure_remote_transport(&server_url) {
+        return;
+    }
+
+    tokio::spawn(async move {
+        let mut ticker = interval(Duration::from_secs(INSECURE_TRANSPORT_WARN_INTERVAL_SECS));
+        loop {
+            ticker.tick().await;
+            warn!(
+                server = %server_url,
+                "agent is configured without TLS; use a wss:// server URL in production",
+            );
+        }
+    });
+}
+
+fn uses_insecure_remote_transport(server_url: &str) -> bool {
+    let Ok(url) = Url::parse(server_url) else {
+        return false;
+    };
+    if url.scheme() != "ws" {
+        return false;
+    }
+
+    !host_is_local(url.host_str())
+}
+
+fn host_is_local(host: Option<&str>) -> bool {
+    let Some(host) = host else {
+        return false;
+    };
+    if host.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+
+    host.parse::<std::net::IpAddr>()
+        .map(|ip| ip.is_loopback())
+        .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::uses_insecure_remote_transport;
+
+    #[test]
+    fn warns_for_remote_ws_transport() {
+        assert!(uses_insecure_remote_transport(
+            "ws://monitor.example.com/ws"
+        ));
+        assert!(uses_insecure_remote_transport("ws://203.0.113.10/ws"));
+    }
+
+    #[test]
+    fn ignores_local_or_tls_agent_transport() {
+        assert!(!uses_insecure_remote_transport(
+            "wss://monitor.example.com/ws"
+        ));
+        assert!(!uses_insecure_remote_transport("ws://127.0.0.1:8080/ws"));
+        assert!(!uses_insecure_remote_transport("ws://localhost:8080/ws"));
+    }
 }

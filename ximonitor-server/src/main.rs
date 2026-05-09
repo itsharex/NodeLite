@@ -27,6 +27,7 @@ use tokio::net::TcpListener;
 use tokio::time::interval;
 use tower_http::trace::TraceLayer;
 use tracing::{error, info, warn};
+use url::Url;
 use ximonitor_proto::{
     HelloMessage, MetricsMessage, NodeSnapshot, PingMessage, PongMessage, ReadonlyAuthConfig,
     ServerConfig, ServerNoticeMessage, WireMessage, parse_server_config,
@@ -105,6 +106,7 @@ enum ParsedFrame {
 const INSTALL_AGENT_SCRIPT: &str = include_str!("../../scripts/install-agent.sh");
 const HELLO_TIMEOUT_SECS: u64 = 10;
 const MAX_OUTSTANDING_PINGS: usize = 32;
+const INSECURE_TRANSPORT_WARN_INTERVAL_SECS: u64 = 900;
 
 impl From<anyhow::Error> for ProtocolError {
     fn from(error: anyhow::Error) -> Self {
@@ -170,6 +172,7 @@ async fn run_server(config_path: &Path) -> Result<()> {
     spawn_registry_reloader(registry.clone());
     spawn_stale_reaper(shared.clone());
     spawn_snapshot_persistor(shared.clone(), config.snapshot_path.clone());
+    spawn_insecure_transport_warning(config.public_base_url.clone(), config.listen);
 
     let enrolled_nodes = registry.count().await;
     info!(
@@ -626,6 +629,54 @@ fn spawn_registry_reloader(registry: NodeRegistry) {
     });
 }
 
+fn spawn_insecure_transport_warning(public_base_url: String, listen: std::net::SocketAddr) {
+    if !uses_insecure_remote_public_base_url(&public_base_url, listen) {
+        return;
+    }
+
+    tokio::spawn(async move {
+        let mut ticker = interval(Duration::from_secs(INSECURE_TRANSPORT_WARN_INTERVAL_SECS));
+        loop {
+            ticker.tick().await;
+            warn!(
+                listen = %listen,
+                public_base_url = %public_base_url,
+                "server is configured without TLS; use an https:// public_base_url and terminate TLS in front of XiMonitor",
+            );
+        }
+    });
+}
+
+fn uses_insecure_remote_public_base_url(
+    public_base_url: &str,
+    listen: std::net::SocketAddr,
+) -> bool {
+    let Ok(url) = Url::parse(public_base_url) else {
+        return false;
+    };
+    if url.scheme() != "http" {
+        return false;
+    }
+    if !listen.ip().is_loopback() {
+        return true;
+    }
+
+    !host_is_local(url.host_str())
+}
+
+fn host_is_local(host: Option<&str>) -> bool {
+    let Some(host) = host else {
+        return false;
+    };
+    if host.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+
+    host.parse::<std::net::IpAddr>()
+        .map(|ip| ip.is_loopback())
+        .unwrap_or(false)
+}
+
 async fn restore_snapshot_if_available(shared: &SharedState, path: &Path) {
     if !path.exists() {
         return;
@@ -693,7 +744,8 @@ mod tests {
 
     use super::{
         AppState, ReadonlyRouteAuth, bootstrap, healthz, index, install_agent_script, node_detail,
-        node_history, node_status, nodes, overview, ws_handler,
+        node_history, node_status, nodes, overview, uses_insecure_remote_public_base_url,
+        ws_handler,
     };
     use crate::history::HistoryStore;
     use crate::registry::NodeRegistry;
@@ -766,5 +818,33 @@ mod tests {
             .expect("request should build");
 
         assert!(auth.is_authorized(&request));
+    }
+
+    #[test]
+    fn warns_for_remote_http_public_base_url() {
+        assert!(uses_insecure_remote_public_base_url(
+            "http://monitor.example.com",
+            SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 8080)),
+        ));
+        assert!(uses_insecure_remote_public_base_url(
+            "http://203.0.113.10:8080",
+            SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 8080)),
+        ));
+    }
+
+    #[test]
+    fn ignores_local_or_tls_public_base_url() {
+        assert!(!uses_insecure_remote_public_base_url(
+            "https://monitor.example.com",
+            SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 8080)),
+        ));
+        assert!(!uses_insecure_remote_public_base_url(
+            "http://127.0.0.1:8080",
+            SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 8080)),
+        ));
+        assert!(!uses_insecure_remote_public_base_url(
+            "http://localhost:8080",
+            SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 8080)),
+        ));
     }
 }
