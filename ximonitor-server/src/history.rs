@@ -14,12 +14,15 @@ use ximonitor_proto::{
     percentage,
 };
 
+const SQLITE_BUSY_TIMEOUT_SECS: u64 = 5;
+
 #[derive(Clone)]
 pub struct HistoryStore {
     db_path: Arc<PathBuf>,
     available: Arc<AtomicBool>,
     last_written_at: Arc<Mutex<HashMap<String, DateTime<Utc>>>>,
     last_pruned_at: Arc<Mutex<Option<DateTime<Utc>>>>,
+    write_gate: Arc<Mutex<()>>,
 }
 
 impl HistoryStore {
@@ -29,6 +32,7 @@ impl HistoryStore {
             available: Arc::new(AtomicBool::new(false)),
             last_written_at: Arc::new(Mutex::new(HashMap::new())),
             last_pruned_at: Arc::new(Mutex::new(None)),
+            write_gate: Arc::new(Mutex::new(())),
         }
     }
 
@@ -64,6 +68,7 @@ impl HistoryStore {
             return;
         };
 
+        let _write_guard = self.write_gate.lock().await;
         {
             let guard = self.last_written_at.lock().await;
             if let Some(previous) = guard.get(&point.node_id) {
@@ -147,8 +152,7 @@ fn initialize_database(db_path: &PathBuf) -> Result<()> {
         }
     }
 
-    let connection = Connection::open(db_path)
-        .with_context(|| format!("failed to open history database {}", db_path.display()))?;
+    let connection = open_database_connection(db_path, true)?;
     connection.execute_batch(
         r#"
         CREATE TABLE IF NOT EXISTS history_points (
@@ -174,8 +178,7 @@ fn write_history_point(
     point: &HistoryPoint,
     prune_before: Option<DateTime<Utc>>,
 ) -> Result<()> {
-    let connection = Connection::open(db_path)
-        .with_context(|| format!("failed to open history database {}", db_path.display()))?;
+    let connection = open_database_connection(db_path, true)?;
     connection.execute(
         r#"
         INSERT INTO history_points (
@@ -216,8 +219,7 @@ fn query_history(
     node_id: &str,
     since: DateTime<Utc>,
 ) -> Result<Vec<HistoryPoint>> {
-    let connection = Connection::open(db_path)
-        .with_context(|| format!("failed to open history database {}", db_path.display()))?;
+    let connection = open_database_connection(db_path, false)?;
     let mut statement = connection.prepare(
         r#"
         SELECT
@@ -256,6 +258,20 @@ fn query_history(
         points.push(row?);
     }
     Ok(points)
+}
+
+fn open_database_connection(db_path: &PathBuf, enable_wal: bool) -> Result<Connection> {
+    let connection = Connection::open(db_path)
+        .with_context(|| format!("failed to open history database {}", db_path.display()))?;
+    connection
+        .busy_timeout(Duration::from_secs(SQLITE_BUSY_TIMEOUT_SECS))
+        .context("failed to configure sqlite busy timeout")?;
+    if enable_wal {
+        connection
+            .pragma_update(None, "journal_mode", "WAL")
+            .context("failed to enable sqlite WAL mode")?;
+    }
+    Ok(connection)
 }
 
 fn build_history_point(status: &NodeStatus) -> Option<HistoryPoint> {
