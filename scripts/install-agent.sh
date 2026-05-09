@@ -24,6 +24,9 @@ BASE_URL="${XIMONITOR_AGENT_BASE_URL:-https://example.invalid/ximonitor/releases
 BINARY_URL="${XIMONITOR_AGENT_BINARY_URL:-}"
 SHA256_X86_64="${XIMONITOR_AGENT_SHA256_X86_64:-}"
 SHA256_AARCH64="${XIMONITOR_AGENT_SHA256_AARCH64:-}"
+SERVICE_USER="ximonitor-agent"
+SERVICE_GROUP="ximonitor-agent"
+STATE_DIR="/var/lib/ximonitor-agent"
 
 calculate_sha256() {
   if command -v sha256sum >/dev/null 2>&1; then
@@ -35,6 +38,52 @@ calculate_sha256() {
     return 0
   fi
   fail "missing required command: sha256sum or shasum"
+}
+
+resolve_nologin_shell() {
+  if command -v nologin >/dev/null 2>&1; then
+    command -v nologin
+    return 0
+  fi
+  if [ -x /usr/sbin/nologin ]; then
+    printf '%s\n' /usr/sbin/nologin
+    return 0
+  fi
+  if [ -x /sbin/nologin ]; then
+    printf '%s\n' /sbin/nologin
+    return 0
+  fi
+  if [ -x /usr/bin/false ]; then
+    printf '%s\n' /usr/bin/false
+    return 0
+  fi
+  if [ -x /bin/false ]; then
+    printf '%s\n' /bin/false
+    return 0
+  fi
+  fail "unable to find a nologin shell for the service user"
+}
+
+ensure_service_account() {
+  if id -u "$SERVICE_USER" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  NOLOGIN_SHELL="$(resolve_nologin_shell)"
+  if command -v useradd >/dev/null 2>&1; then
+    useradd --system --no-create-home --home-dir /nonexistent \
+      --shell "$NOLOGIN_SHELL" --user-group "$SERVICE_USER" \
+      || fail "failed to create service user $SERVICE_USER"
+    return 0
+  fi
+  if command -v adduser >/dev/null 2>&1; then
+    adduser --system --group --no-create-home --home /nonexistent \
+      --shell "$NOLOGIN_SHELL" "$SERVICE_USER" \
+      || fail "failed to create service user $SERVICE_USER"
+    return 0
+  fi
+
+  fail "missing required command: useradd or adduser"
 }
 
 while [ "$#" -gt 0 ]; do
@@ -125,9 +174,12 @@ fi
 
 need_cmd uname
 need_cmd curl
+need_cmd id
 need_cmd sed
 need_cmd mkdir
 need_cmd install
+need_cmd chown
+need_cmd chmod
 need_cmd systemctl
 
 ARCH="$(uname -m)"
@@ -158,7 +210,13 @@ TMP_PATH="$BIN_PATH.tmp"
 CONFIG_PATH="$CONFIG_DIR/agent.toml"
 UNIT_PATH="/etc/systemd/system/ximonitor-agent.service"
 
-mkdir -p "$INSTALL_DIR" "$CONFIG_DIR"
+ensure_service_account
+SERVICE_GROUP="$(id -gn "$SERVICE_USER")"
+mkdir -p "$INSTALL_DIR" "$CONFIG_DIR" "$STATE_DIR"
+chown root:root "$INSTALL_DIR"
+chmod 0755 "$INSTALL_DIR"
+chown root:"$SERVICE_GROUP" "$CONFIG_DIR" "$STATE_DIR"
+chmod 0750 "$CONFIG_DIR" "$STATE_DIR"
 
 printf '%s\n' "Downloading $DOWNLOAD_URL"
 curl -fsSL "$DOWNLOAD_URL" -o "$TMP_PATH" || fail "failed to download agent binary"
@@ -166,6 +224,7 @@ ACTUAL_SHA256="$(calculate_sha256 "$TMP_PATH")"
 [ "$ACTUAL_SHA256" = "$EXPECTED_SHA256" ] || fail "downloaded agent checksum mismatch"
 chmod 0755 "$TMP_PATH"
 mv "$TMP_PATH" "$BIN_PATH"
+chown root:root "$BIN_PATH"
 
 cat >"$CONFIG_PATH" <<EOF
 [agent]
@@ -175,7 +234,8 @@ server = "$(toml_escape "$SERVER")"
 token = "$(toml_escape "$TOKEN")"
 report_interval_secs = 5
 EOF
-chmod 0600 "$CONFIG_PATH"
+chown root:"$SERVICE_GROUP" "$CONFIG_PATH"
+chmod 0640 "$CONFIG_PATH"
 
 cat >"$UNIT_PATH" <<EOF
 [Unit]
@@ -188,7 +248,13 @@ Type=simple
 ExecStart=$BIN_PATH --config $CONFIG_PATH
 Restart=always
 RestartSec=3
-User=root
+User=$SERVICE_USER
+Group=$SERVICE_GROUP
+WorkingDirectory=$STATE_DIR
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
 
 [Install]
 WantedBy=multi-user.target

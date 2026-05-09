@@ -166,7 +166,8 @@ curl -fsSL https://monitor.example.com/install/hk-01/NODE_TOKEN/install-agent.sh
 - 脚本会检测架构并下载对应的 `ximonitor-agent-<target>` 二进制
 - 脚本会按当前架构校验服务端签发的 SHA-256，校验失败会直接终止
 - `issue-node` 打印出的安装链接已经是节点级安装 token，不需要再把面板 Basic Auth 凭据拼进 `curl`
-- 会写入 `/etc/ximonitor/agent.toml`，并将权限收紧到 `0600`
+- 会创建 `ximonitor-agent` 专用系统用户，并以该用户运行 systemd service
+- 会写入 `/etc/ximonitor/agent.toml`，并将目录/文件权限收紧到仅 root 与该服务用户可读
 - 会生成 `ximonitor-agent.service`
 - 会执行 `daemon-reload`、`enable` 和 `restart`
 
