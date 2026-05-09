@@ -128,9 +128,7 @@ impl Registry {
         snapshot: NodeSnapshot,
         now: DateTime<Utc>,
     ) -> Option<NodeStatus> {
-        let Some(entry) = self.nodes.get_mut(node_id) else {
-            return None;
-        };
+        let entry = self.nodes.get_mut(node_id)?;
         if entry.active_session_id != Some(session_id) {
             return None;
         }

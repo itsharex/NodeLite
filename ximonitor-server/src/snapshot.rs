@@ -34,12 +34,12 @@ pub fn spawn_snapshot_persistor(shared: SharedState, snapshot_path: PathBuf) {
 }
 
 async fn persist_snapshot(path: &Path, statuses: &[NodeStatus]) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            fs::create_dir_all(parent).await.with_context(|| {
-                format!("failed to create snapshot directory {}", parent.display())
-            })?;
-        }
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent)
+            .await
+            .with_context(|| format!("failed to create snapshot directory {}", parent.display()))?;
     }
 
     let payload =

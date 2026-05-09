@@ -290,12 +290,12 @@ async fn load_registry_entries(path: &Path) -> Result<HashMap<String, Registered
 async fn save_registry_file(path: &Path, file: &RegistryFile) -> Result<()> {
     validate_registry_file(path, file)?;
 
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            fs::create_dir_all(parent)
-                .await
-                .with_context(|| format!("failed to create {}", parent.display()))?;
-        }
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent)
+            .await
+            .with_context(|| format!("failed to create {}", parent.display()))?;
     }
 
     let payload =

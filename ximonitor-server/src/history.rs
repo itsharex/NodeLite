@@ -144,12 +144,11 @@ impl HistoryStore {
 }
 
 fn initialize_database(db_path: &PathBuf) -> Result<()> {
-    if let Some(parent) = db_path.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent).with_context(|| {
-                format!("failed to create history directory {}", parent.display())
-            })?;
-        }
+    if let Some(parent) = db_path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create history directory {}", parent.display()))?;
     }
 
     let connection = open_database_connection(db_path, true)?;

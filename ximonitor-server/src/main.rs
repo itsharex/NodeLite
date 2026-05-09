@@ -280,21 +280,23 @@ async fn load_server_config(path: &Path) -> Result<ServerConfig> {
     let config = parse_server_config(&content)
         .map_err(|error| anyhow!("failed to parse {}: {error}", path.display()))?;
 
-    if let Some(parent) = config.snapshot_path.parent() {
-        if !parent.as_os_str().is_empty() && !parent.exists() {
-            warn!(
-                snapshot_dir = %parent.display(),
-                "snapshot directory does not exist yet; it will be created later",
-            );
-        }
+    if let Some(parent) = config.snapshot_path.parent()
+        && !parent.as_os_str().is_empty()
+        && !parent.exists()
+    {
+        warn!(
+            snapshot_dir = %parent.display(),
+            "snapshot directory does not exist yet; it will be created later",
+        );
     }
-    if let Some(parent) = config.history_db_path.parent() {
-        if !parent.as_os_str().is_empty() && !parent.exists() {
-            warn!(
-                history_dir = %parent.display(),
-                "history directory does not exist yet; it will be created later",
-            );
-        }
+    if let Some(parent) = config.history_db_path.parent()
+        && !parent.as_os_str().is_empty()
+        && !parent.exists()
+    {
+        warn!(
+            history_dir = %parent.display(),
+            "history directory does not exist yet; it will be created later",
+        );
     }
 
     Ok(config)
