@@ -30,7 +30,6 @@ pub struct RegisteredNode {
 pub struct NodeRegistry {
     path: Arc<PathBuf>,
     state: Arc<RwLock<RegistryState>>,
-    legacy_shared_token: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -61,13 +60,12 @@ struct RegistryFile {
 }
 
 impl NodeRegistry {
-    pub async fn load(path: &Path, legacy_shared_token: Option<String>) -> Result<Self> {
+    pub async fn load(path: &Path) -> Result<Self> {
         let entries = load_registry_entries(path).await?;
 
         Ok(Self {
             path: Arc::new(path.to_path_buf()),
             state: Arc::new(RwLock::new(RegistryState { entries })),
-            legacy_shared_token,
         })
     }
 
@@ -75,22 +73,12 @@ impl NodeRegistry {
         validate_runtime_identity(identity)?;
         validate_non_empty("hello.token", token)?;
         let state = self.state.read().await;
-        authorize_identity(
-            &state.entries,
-            self.legacy_shared_token.as_deref(),
-            identity,
-            token,
-        )
+        authorize_identity(&state.entries, identity, token)
     }
 
     pub async fn is_token_current(&self, node_id: &str, token: &str) -> bool {
         let state = self.state.read().await;
-        is_token_current(
-            &state.entries,
-            self.legacy_shared_token.as_deref(),
-            node_id,
-            token,
-        )
+        is_token_current(&state.entries, node_id, token)
     }
 
     pub async fn reload(&self) -> Result<bool> {
@@ -107,10 +95,6 @@ impl NodeRegistry {
     pub async fn count(&self) -> usize {
         let state = self.state.read().await;
         state.entries.len()
-    }
-
-    pub fn uses_legacy_shared_token(&self) -> bool {
-        self.legacy_shared_token.is_some()
     }
 
     pub fn path(&self) -> &Path {
@@ -384,7 +368,6 @@ fn validate_registered_node(node: &RegisteredNode) -> Result<()> {
 
 fn authorize_identity(
     entries: &HashMap<String, RegisteredNode>,
-    _legacy_shared_token: Option<&str>,
     identity: &NodeIdentity,
     token: &str,
 ) -> Result<NodeIdentity> {
@@ -403,12 +386,7 @@ fn authorize_identity(
     bail!("node {} is not enrolled", identity.node_id);
 }
 
-fn is_token_current(
-    entries: &HashMap<String, RegisteredNode>,
-    _legacy_shared_token: Option<&str>,
-    node_id: &str,
-    token: &str,
-) -> bool {
+fn is_token_current(entries: &HashMap<String, RegisteredNode>, node_id: &str, token: &str) -> bool {
     if let Some(entry) = entries.get(node_id) {
         return token == entry.token;
     }
@@ -523,7 +501,7 @@ mod tests {
             };
             std::fs::write(&path, serde_json::to_string_pretty(&file).expect("json"))
                 .expect("registry should be written");
-            let registry = NodeRegistry::load(&path, None)
+            let registry = NodeRegistry::load(&path)
                 .await
                 .expect("registry should load");
             let identity = NodeIdentity {
@@ -623,7 +601,7 @@ mod tests {
             .await
             .expect("node should be issued");
             let old_token = issued.node.token.clone();
-            let registry = NodeRegistry::load(&path, None)
+            let registry = NodeRegistry::load(&path)
                 .await
                 .expect("registry should load");
             assert!(registry.is_token_current("hk-01", &old_token).await);
@@ -653,7 +631,7 @@ mod tests {
     }
 
     #[test]
-    fn shared_token_does_not_authorize_unenrolled_nodes() {
+    fn unenrolled_nodes_are_rejected() {
         let runtime = Runtime::new().expect("runtime should build");
         runtime.block_on(async {
             let unique = SystemTime::now()
@@ -666,7 +644,7 @@ mod tests {
             let path = temp_dir.join("server.json");
             std::fs::write(&path, "{\"nodes\":[]}").expect("empty registry should be written");
 
-            let registry = NodeRegistry::load(&path, Some("legacy-token".to_string()))
+            let registry = NodeRegistry::load(&path)
                 .await
                 .expect("registry should load");
             let identity = NodeIdentity {
@@ -683,7 +661,7 @@ mod tests {
             };
 
             let error = registry
-                .authorize(&identity, "legacy-token")
+                .authorize(&identity, "some-token")
                 .await
                 .expect_err("unenrolled node should be rejected");
             assert!(error.to_string().contains("not enrolled"));

@@ -38,7 +38,6 @@ pub struct ServerConfig {
     pub listen: SocketAddr,
     pub public_base_url: String,
     pub readonly_auth: Option<ReadonlyAuthConfig>,
-    pub shared_token: Option<String>,
     pub node_registry_path: PathBuf,
     pub history_db_path: PathBuf,
     pub snapshot_path: PathBuf,
@@ -100,8 +99,6 @@ struct RawServerConfigFile {
 struct RawServerSection {
     listen: String,
     public_base_url: String,
-    #[serde(default)]
-    shared_token: Option<String>,
     #[serde(default = "default_node_registry_path")]
     node_registry_path: PathBuf,
     #[serde(default = "default_history_db_path")]
@@ -203,13 +200,6 @@ impl RawServerConfigFile {
             &self.server.public_base_url,
             &["http", "https"],
         )?;
-        let shared_token = self
-            .server
-            .shared_token
-            .map(|value| value.trim().to_string());
-        if let Some(shared_token) = shared_token.as_deref() {
-            validate_non_empty("server.shared_token", shared_token)?;
-        }
         if let Some(agent_release_base_url) = self.install.agent_release_base_url.as_deref() {
             validate_url(
                 "install.agent_release_base_url",
@@ -290,7 +280,6 @@ impl RawServerConfigFile {
             listen,
             public_base_url: self.server.public_base_url,
             readonly_auth,
-            shared_token,
             node_registry_path: self.server.node_registry_path,
             history_db_path: self.server.history_db_path,
             snapshot_path: self.server.snapshot_path,
@@ -455,7 +444,6 @@ mod tests {
 
         assert_eq!(config.listen.to_string(), "127.0.0.1:8080");
         assert_eq!(config.readonly_auth, None);
-        assert_eq!(config.shared_token, None);
         assert_eq!(config.max_message_bytes, DEFAULT_MAX_MESSAGE_BYTES);
         assert_eq!(
             config.node_registry_path,
@@ -519,13 +507,12 @@ mod tests {
     }
 
     #[test]
-    fn parses_server_config_with_install_and_legacy_token() {
+    fn parses_server_config_with_install() {
         let config = parse_server_config(
             r#"
             [server]
             listen = "127.0.0.1:8080"
             public_base_url = "https://monitor.example.com"
-            shared_token = "legacy-token"
             node_registry_path = "/etc/ximonitor/server.json"
 
             [auth]
@@ -547,7 +534,6 @@ mod tests {
                 .map(|auth| auth.username.as_str()),
             Some("viewer")
         );
-        assert_eq!(config.shared_token.as_deref(), Some("legacy-token"));
         assert_eq!(
             config.node_registry_path,
             PathBuf::from("/etc/ximonitor/server.json")

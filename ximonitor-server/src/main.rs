@@ -154,17 +154,14 @@ async fn run_server(config_path: &Path) -> Result<()> {
     let public_base_url = config.public_base_url.clone();
     let refresh_interval_secs = config.refresh_interval_secs;
     let readonly_route_auth = ReadonlyRouteAuth::from_config(config.readonly_auth.clone());
-    let registry = NodeRegistry::load(
-        config.node_registry_path.as_path(),
-        config.shared_token.clone(),
-    )
-    .await
-    .with_context(|| {
-        format!(
-            "failed to load node registry {}",
-            config.node_registry_path.display()
-        )
-    })?;
+    let registry = NodeRegistry::load(config.node_registry_path.as_path())
+        .await
+        .with_context(|| {
+            format!(
+                "failed to load node registry {}",
+                config.node_registry_path.display()
+            )
+        })?;
     let shared = SharedState::new(Arc::clone(&config));
     let history = HistoryStore::new(config.history_db_path.clone());
     history.initialize().await;
@@ -173,13 +170,6 @@ async fn run_server(config_path: &Path) -> Result<()> {
     spawn_registry_reloader(registry.clone());
     spawn_stale_reaper(shared.clone());
     spawn_snapshot_persistor(shared.clone(), config.snapshot_path.clone());
-
-    if registry.uses_legacy_shared_token() {
-        warn!(
-            registry_path = %config.node_registry_path.display(),
-            "legacy shared_token is configured but no longer accepted for agent enrollment; use per-node registry tokens instead",
-        );
-    }
 
     let enrolled_nodes = registry.count().await;
     info!(
@@ -717,7 +707,6 @@ mod tests {
             listen: SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 8080)),
             public_base_url: "http://127.0.0.1:8080".to_string(),
             readonly_auth: None,
-            shared_token: None,
             node_registry_path: registry_path,
             history_db_path: PathBuf::from("./data/history.sqlite3"),
             snapshot_path: PathBuf::from("./data/snapshot.json"),
@@ -734,10 +723,7 @@ mod tests {
         let state = AppState {
             history: HistoryStore::new(PathBuf::from("./data/history.sqlite3")),
             registry: runtime
-                .block_on(NodeRegistry::load(
-                    config.node_registry_path.as_path(),
-                    config.shared_token.clone(),
-                ))
+                .block_on(NodeRegistry::load(config.node_registry_path.as_path()))
                 .expect("registry should load"),
             shared: SharedState::new(config),
         };
