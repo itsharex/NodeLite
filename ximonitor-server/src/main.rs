@@ -177,7 +177,7 @@ async fn run_server(config_path: &Path) -> Result<()> {
     if registry.uses_legacy_shared_token() {
         warn!(
             registry_path = %config.node_registry_path.display(),
-            "legacy shared_token authentication is still enabled; migrate agents to per-node tokens in the registry file",
+            "legacy shared_token is configured but no longer accepted for agent enrollment; use per-node registry tokens instead",
         );
     }
 

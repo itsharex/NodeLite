@@ -393,7 +393,7 @@ fn validate_registered_node(node: &RegisteredNode) -> Result<()> {
 
 fn authorize_identity(
     entries: &HashMap<String, RegisteredNode>,
-    legacy_shared_token: Option<&str>,
+    _legacy_shared_token: Option<&str>,
     identity: &NodeIdentity,
     token: &str,
 ) -> Result<NodeIdentity> {
@@ -409,18 +409,12 @@ fn authorize_identity(
         return Ok(identity);
     }
 
-    if let Some(shared_token) = legacy_shared_token {
-        if token == shared_token {
-            return Ok(identity.clone());
-        }
-    }
-
     bail!("node {} is not enrolled", identity.node_id);
 }
 
 fn is_token_current(
     entries: &HashMap<String, RegisteredNode>,
-    legacy_shared_token: Option<&str>,
+    _legacy_shared_token: Option<&str>,
     node_id: &str,
     token: &str,
 ) -> bool {
@@ -428,7 +422,7 @@ fn is_token_current(
         return token == entry.token;
     }
 
-    legacy_shared_token == Some(token)
+    false
 }
 
 fn validate_runtime_identity(identity: &NodeIdentity) -> Result<()> {
@@ -665,6 +659,47 @@ mod tests {
                     .is_token_current("hk-01", &rotated.node.token)
                     .await
             );
+
+            let _ = std::fs::remove_file(&path);
+            let _ = std::fs::remove_dir(&temp_dir);
+        });
+    }
+
+    #[test]
+    fn shared_token_does_not_authorize_unenrolled_nodes() {
+        let runtime = Runtime::new().expect("runtime should build");
+        runtime.block_on(async {
+            let unique = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock should be monotonic enough")
+                .as_nanos();
+            let temp_dir =
+                std::env::temp_dir().join(format!("ximonitor-registry-legacy-test-{unique}"));
+            std::fs::create_dir_all(&temp_dir).expect("temp dir should exist");
+            let path = temp_dir.join("server.json");
+            std::fs::write(&path, "{\"nodes\":[]}").expect("empty registry should be written");
+
+            let registry = NodeRegistry::load(&path, Some("legacy-token".to_string()))
+                .await
+                .expect("registry should load");
+            let identity = NodeIdentity {
+                node_id: "legacy-01".to_string(),
+                node_label: "Legacy 01".to_string(),
+                hostname: "legacy-01.internal".to_string(),
+                os: "Ubuntu".to_string(),
+                kernel_version: None,
+                cpu_model: None,
+                cpu_cores: 2,
+                agent_version: "0.1.0".to_string(),
+                boot_time: None,
+                tags: Vec::new(),
+            };
+
+            let error = registry
+                .authorize(&identity, "legacy-token")
+                .await
+                .expect_err("unenrolled node should be rejected");
+            assert!(error.to_string().contains("not enrolled"));
 
             let _ = std::fs::remove_file(&path);
             let _ = std::fs::remove_dir(&temp_dir);

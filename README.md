@@ -183,7 +183,7 @@ sh scripts/install-agent.sh \
 
 - 网页端默认只读，不提供写配置入口。
 - `/healthz` 和 `/ws` 不走只读面板鉴权；面板、JSON API 和安装脚本走 HTTP Basic Auth。
-- agent 优先使用服务端 `server.json` 中的逐节点 token；旧的 `shared_token` 仅作为兼容迁移手段保留。
+- agent 只接受服务端 `server.json` 中已登记节点的逐节点 token；旧的 `shared_token` 即使仍出现在配置里，也不会再绕过注册表。
 - 首版 agent 只支持 Linux。
 - 当前历史图保存基础趋势，不做长期归档。
 - 生产环境建议放在 Nginx 或 Caddy 后面并启用 HTTPS。
