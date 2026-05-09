@@ -35,6 +35,30 @@ XiMonitor 是一个用 Rust 编写的轻量级服务器监控面板，包含：
 cargo check
 ```
 
+## 交叉编译 Linux x86_64
+
+仓库内已经包含 musl 目标的 `lld` 链接配置，可以直接在 macOS 上构建静态 Linux `x86_64` 产物：
+
+```bash
+cargo build --release --target x86_64-unknown-linux-musl \
+  -p ximonitor-server \
+  -p ximonitor-agent
+```
+
+产物位置：
+
+```bash
+target/x86_64-unknown-linux-musl/release/ximonitor-server
+target/x86_64-unknown-linux-musl/release/ximonitor-agent
+```
+
+这两个产物是：
+
+- ELF 64-bit
+- x86-64
+- statically linked
+- stripped
+
 ## 服务端启动
 
 1. 复制配置：
