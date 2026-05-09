@@ -8,6 +8,7 @@ mod imp {
 
     use anyhow::{Context, Result, anyhow};
     use chrono::{Duration, Utc};
+    use tracing::warn;
     use ximonitor_proto::{
         AgentConfig, DiskUsage, LoadAverage, MemoryUsage, NetworkCounters, NodeIdentity,
         NodeSnapshot, percentage,
@@ -345,7 +346,18 @@ mod imp {
                 continue;
             }
 
-            let stats = statvfs(&mount_point)?;
+            let stats = match statvfs(&mount_point) {
+                Ok(stats) => stats,
+                Err(error) => {
+                    warn!(
+                        mount_point = %mount_point,
+                        fs_type = %fs_type,
+                        error = ?error,
+                        "skipping disk mount after statvfs failure",
+                    );
+                    continue;
+                }
+            };
             if stats.total_bytes == 0 {
                 continue;
             }
