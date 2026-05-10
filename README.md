@@ -25,7 +25,7 @@ XiMonitor 是一个用 Rust 编写的轻量级服务器监控面板，包含：
   - `ping`
   - `pong`
   - `server_notice`
-- 72 小时 SQLite 历史保留
+- 14 天 SQLite 历史保留
 - 快照落盘与进程重启后恢复最近状态
 - agent 指数退避自动重连
 
