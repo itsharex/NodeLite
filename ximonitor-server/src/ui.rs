@@ -376,6 +376,10 @@ const INDEX_TEMPLATE: &str = r#"<!doctype html>
         return fmtPercent((used / total) * 100);
       }
 
+      function fmtDateTime(value) {
+        return new Date(value).toLocaleString(currentLanguage);
+      }
+
       function applyChrome() {
         document.documentElement.lang = currentLanguage;
         document.title = t("index.page_title");
@@ -386,7 +390,7 @@ const INDEX_TEMPLATE: &str = r#"<!doctype html>
           seconds: `${Math.round(REFRESH_MS / 1000)}s`,
         });
         document.getElementById("updated-at").textContent = latestOverview
-          ? t("common.updated_at", { time: new Date(latestOverview.generated_at).toLocaleString() })
+          ? t("common.updated_at", { time: fmtDateTime(latestOverview.generated_at) })
           : t("common.waiting_for_data");
       }
 
@@ -886,6 +890,10 @@ const NODE_TEMPLATE: &str = r#"<!doctype html>
         return `${Math.round(value)} ms`;
       }
 
+      function fmtDateTime(value) {
+        return new Date(value).toLocaleString(currentLanguage);
+      }
+
       function fetchJson(url) {
         return fetch(url, { headers: { "accept": "application/json" } }).then((response) => {
           if (!response.ok) throw new Error(`${url} -> ${response.status}`);
@@ -1098,7 +1106,7 @@ const NODE_TEMPLATE: &str = r#"<!doctype html>
 
       function renderUpdatedAt(node) {
         document.getElementById("updated").textContent = node.last_seen
-          ? t("common.last_seen", { time: new Date(node.last_seen).toLocaleString() })
+          ? t("common.last_seen", { time: fmtDateTime(node.last_seen) })
           : t("common.no_heartbeat_yet");
       }
 
