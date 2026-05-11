@@ -59,7 +59,7 @@ jobs:
         env:
           RELEASE_TAG_NAME: ${{ env.RELEASE_TAG }}
         run: |
-          RELEASE_VERSION="${RELEASE_TAG_NAME#v}"
+          export RELEASE_VERSION="${RELEASE_TAG_NAME#v}"
           python3 - <<'PY'
           import os
           import re
