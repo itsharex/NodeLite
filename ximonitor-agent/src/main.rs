@@ -7,8 +7,7 @@ use anyhow::{Context, Result, anyhow};
 use clap::Parser;
 use futures::{SinkExt, StreamExt};
 use tokio::fs;
-use tokio::time::interval;
-use tokio::time::sleep;
+use tokio::time::{interval, sleep, timeout};
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message;
 use tracing::{info, warn};
@@ -21,6 +20,7 @@ use ximonitor_proto::{
 use crate::collector::new_collector;
 
 const INSECURE_TRANSPORT_WARN_INTERVAL_SECS: u64 = 900;
+const CONNECT_TIMEOUT_SECS: u64 = 20;
 
 #[derive(Debug, Parser)]
 #[command(name = "ximonitor-agent")]
@@ -30,6 +30,12 @@ struct Cli {
     config: PathBuf,
     #[arg(long)]
     sample_once: bool,
+}
+
+#[derive(Debug)]
+struct SessionError {
+    established_session: bool,
+    source: anyhow::Error,
 }
 
 #[tokio::main]
@@ -107,11 +113,15 @@ async fn run_forever(
                 attempt = 0;
             }
             Err(error) => {
+                if error.established_session {
+                    attempt = 0;
+                }
                 let delay = reconnect_delay(attempt);
                 warn!(
                     server = %config.server,
                     delay_secs = delay.as_secs(),
-                    error = ?error,
+                    established_session = error.established_session,
+                    error = ?error.source,
                     "agent session ended; retrying after backoff"
                 );
                 sleep(delay).await;
@@ -125,10 +135,15 @@ async fn run_session(
     config: &AgentConfig,
     collector: &mut crate::collector::HostCollector,
     identity: &ximonitor_proto::NodeIdentity,
-) -> Result<()> {
-    let (socket, _) = connect_async(config.server.as_str())
-        .await
-        .with_context(|| format!("failed to connect to {}", config.server))?;
+) -> std::result::Result<(), SessionError> {
+    let (socket, _) = timeout(
+        Duration::from_secs(CONNECT_TIMEOUT_SECS),
+        connect_async(config.server.as_str()),
+    )
+    .await
+    .map_err(|_| session_error(false, anyhow!("timed out connecting to {}", config.server)))?
+    .map_err(|error| anyhow!("failed to connect to {}: {error}", config.server))
+    .map_err(|error| session_error(false, error))?;
     let (mut sender, mut receiver) = socket.split();
 
     send_wire_message(
@@ -138,49 +153,79 @@ async fn run_session(
             identity: identity.clone(),
         }),
     )
-    .await?;
-
-    send_metrics(&mut sender, collector).await?;
+    .await
+    .map_err(|error| session_error(false, error))?;
 
     let mut report_ticker = interval(Duration::from_secs(config.report_interval_secs));
+    let mut authenticated = false;
 
     loop {
         tokio::select! {
-            _ = report_ticker.tick() => {
-                send_metrics(&mut sender, collector).await?;
+            _ = report_ticker.tick(), if authenticated => {
+                send_metrics(&mut sender, collector)
+                    .await
+                    .map_err(|error| session_error(true, error))?;
             }
             incoming = receiver.next() => {
                 let Some(frame) = incoming else {
-                    return Err(anyhow!("server closed websocket connection"));
+                    return Err(session_error(
+                        authenticated,
+                        anyhow!("server closed websocket connection"),
+                    ));
                 };
-                let frame = frame.context("failed to read websocket frame")?;
+                let frame = frame.map_err(|error| session_error(authenticated, anyhow!(error)))?;
                 match frame {
                     Message::Text(text) => {
-                        match serde_json::from_str::<WireMessage>(&text).context("invalid websocket json")? {
+                        match serde_json::from_str::<WireMessage>(&text).context("invalid websocket json").map_err(|error| session_error(authenticated, error))? {
                             WireMessage::Ping(PingMessage { nonce }) => {
-                                send_wire_message(&mut sender, &WireMessage::Pong(PongMessage { nonce })).await?;
+                                send_wire_message(&mut sender, &WireMessage::Pong(PongMessage { nonce }))
+                                    .await
+                                    .map_err(|error| session_error(authenticated, error))?;
                             }
                             WireMessage::ServerNotice(ServerNoticeMessage { level, message }) => {
+                                if !authenticated
+                                    && matches!(level, NoticeLevel::Info)
+                                    && message == "authenticated"
+                                {
+                                    authenticated = true;
+                                }
                                 log_notice(level, &message);
                             }
                             WireMessage::Hello(_) | WireMessage::Metrics(_) | WireMessage::Pong(_) => {
-                                return Err(anyhow!("received unexpected websocket message from server"));
+                                return Err(session_error(
+                                    authenticated,
+                                    anyhow!("received unexpected websocket message from server"),
+                                ));
                             }
                         }
                     }
                     Message::Ping(payload) => {
-                        sender.send(Message::Pong(payload)).await.context("failed to reply to ping frame")?;
+                        sender.send(Message::Pong(payload)).await.context("failed to reply to ping frame")
+                            .map_err(|error| session_error(authenticated, error))?;
                     }
                     Message::Pong(_) => {}
                     Message::Close(frame) => {
-                        return Err(anyhow!("server closed websocket connection: {:?}", frame));
+                        return Err(session_error(
+                            authenticated,
+                            anyhow!("server closed websocket connection: {:?}", frame),
+                        ));
                     }
                     Message::Binary(_) | Message::Frame(_) => {
-                        return Err(anyhow!("binary websocket frames are not supported"));
+                        return Err(session_error(
+                            authenticated,
+                            anyhow!("binary websocket frames are not supported"),
+                        ));
                     }
                 }
             }
         }
+    }
+}
+
+fn session_error(established_session: bool, source: anyhow::Error) -> SessionError {
+    SessionError {
+        established_session,
+        source,
     }
 }
 
