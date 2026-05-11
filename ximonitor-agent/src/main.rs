@@ -162,6 +162,9 @@ async fn run_session(
     loop {
         tokio::select! {
             _ = report_ticker.tick(), if authenticated => {
+                // Wait for the server's explicit auth notice before starting the
+                // steady metrics stream; that gives reconnect logic a clean
+                // "pre-auth" vs "established session" boundary.
                 send_metrics(&mut sender, collector)
                     .await
                     .map_err(|error| session_error(true, error))?;

@@ -1078,6 +1078,8 @@ async fn restore_snapshot_if_available(shared: &SharedState, path: &Path) {
 }
 
 fn sanitize_snapshot(config: &ServerConfig, mut snapshot: NodeSnapshot) -> NodeSnapshot {
+    // Treat agent input as untrusted: clamp impossible values before they can
+    // distort UI summaries, overflow aggregations, or pollute history samples.
     snapshot.cpu_usage_percent = sanitize_percentage(snapshot.cpu_usage_percent);
     snapshot.load = sanitize_load_average(snapshot.load);
     snapshot.memory = sanitize_memory_usage(snapshot.memory);
@@ -1124,6 +1126,7 @@ fn sanitize_memory_usage(mut memory: MemoryUsage) -> MemoryUsage {
     memory.used_bytes = memory.used_bytes.min(memory.total_bytes);
     memory.available_bytes = memory.available_bytes.min(memory.total_bytes);
     if memory.used_bytes.saturating_add(memory.available_bytes) > memory.total_bytes {
+        // Keep the pair self-consistent instead of trusting broken agent math.
         memory.available_bytes = memory.total_bytes.saturating_sub(memory.used_bytes);
     }
 
@@ -1142,6 +1145,7 @@ fn sanitize_disk_usage(mut disk: DiskUsage) -> Option<DiskUsage> {
     disk.available_bytes = disk.available_bytes.min(disk.total_bytes);
     disk.used_bytes = disk.used_bytes.min(disk.total_bytes);
     if disk.used_bytes.saturating_add(disk.available_bytes) > disk.total_bytes {
+        // Recompute a coherent "used" side when the raw counters disagree.
         disk.used_bytes = disk.total_bytes.saturating_sub(disk.available_bytes);
     }
     disk.used_percent = sanitize_percentage(percentage(disk.used_bytes, disk.total_bytes));

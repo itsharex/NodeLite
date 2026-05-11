@@ -452,6 +452,8 @@ where
 {
     let path = path.to_path_buf();
     tokio::task::spawn_blocking(move || {
+        // Registry changes come from both the running server and one-shot CLI
+        // commands, so serialize them through a file lock before read-modify-write.
         let _lock = acquire_registry_lock(&path)?;
         let mut file = load_registry_file_sync(&path)?;
         let (value, should_persist) = operation(&mut file)?;
@@ -655,6 +657,7 @@ fn is_token_current(entries: &HashMap<String, RegisteredNode>, node_id: &str, to
 }
 
 fn constant_time_eq(left: &str, right: &str) -> bool {
+    // Keep token comparisons insensitive to early mismatch position.
     let left = left.as_bytes();
     let right = right.as_bytes();
     let mut diff = left.len() ^ right.len();
