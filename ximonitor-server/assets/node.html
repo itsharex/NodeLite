@@ -309,6 +309,44 @@
         overflow: hidden;
       }
       .chart-stage svg { width: 100%; height: 100%; display: block; }
+      .chart-tooltip {
+        position: absolute;
+        z-index: 4;
+        min-width: 138px;
+        max-width: 220px;
+        padding: 8px 10px;
+        border-radius: 12px;
+        background: rgba(15, 23, 42, 0.92);
+        border: 1px solid var(--border-strong);
+        color: var(--text-secondary);
+        box-shadow: 0 16px 36px rgba(0,0,0,0.28);
+        pointer-events: none;
+        transform: translate(-50%, calc(-100% - 10px));
+        font-size: 11px;
+        line-height: 1.45;
+      }
+      [data-theme="light"] .chart-tooltip {
+        background: rgba(255,255,255,0.96);
+        box-shadow: 0 16px 36px rgba(15,23,42,0.12);
+      }
+      .chart-tooltip .time {
+        color: var(--text-muted);
+        margin-bottom: 4px;
+      }
+      .chart-tooltip .row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        font-variant-numeric: tabular-nums;
+      }
+      .chart-tooltip .swatch {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        display: inline-block;
+        margin-right: 5px;
+      }
       .chart-footer {
         margin-top: 6px;
         font-size: 11px;
@@ -1278,6 +1316,111 @@
         if (values.length === 0) return null;
         return values.reduce((sum, value) => sum + value, 0) / values.length;
       }
+      function chartPoints(history, field) {
+        return history.map((p) => ({ ts: p._ts, value: p[field] }));
+      }
+      function formatChartValue(value, kind) {
+        const numeric = Number(value);
+        if (!Number.isFinite(numeric)) return "—";
+        if (kind === "percent") return `${numeric >= 10 ? numeric.toFixed(0) : numeric.toFixed(1)}%`;
+        if (kind === "rate") return fmtRate(numeric);
+        if (kind === "latency") return `${numeric.toFixed(numeric >= 10 ? 0 : 1)} ms`;
+        return numeric >= 100 ? numeric.toFixed(0) : numeric.toFixed(1);
+      }
+      function chartDisplayBounds(values, options = {}) {
+        const bounds = chartBounds(values, options.clipSpikes);
+        if (Number.isFinite(Number(options.minValue))) {
+          bounds.displayMin = Math.min(bounds.displayMin, Number(options.minValue));
+        }
+        if (Number.isFinite(Number(options.maxValue))) {
+          bounds.displayMax = Math.max(bounds.displayMax, Number(options.maxValue));
+        }
+        if (bounds.displayMax <= bounds.displayMin) {
+          bounds.displayMax = bounds.displayMin + 1;
+        }
+        return bounds;
+      }
+      function chartY(value, bounds, height, padTop, padBottom) {
+        const span = Math.max(bounds.displayMax - bounds.displayMin, 1);
+        const v = Math.min(Math.max(Number(value), bounds.displayMin), bounds.displayMax);
+        return height - padBottom - ((v - bounds.displayMin) / span) * (height - padTop - padBottom);
+      }
+      function chartGridMarkup(bounds, width, height, padLeft, padRight, padTop, padBottom, kind) {
+        const ticks = [0, 0.25, 0.5, 0.75, 1].map((ratio) => bounds.displayMin + (bounds.displayMax - bounds.displayMin) * ratio);
+        return ticks.map((tick) => {
+          const y = chartY(tick, bounds, height, padTop, padBottom);
+          return `
+            <line x1="${padLeft}" x2="${width - padRight}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}" stroke="currentColor" stroke-opacity="0.09" stroke-width="1" />
+            <text x="${padLeft - 8}" y="${(y + 3).toFixed(1)}" text-anchor="end" fill="currentColor" opacity="0.58" font-size="10">${escapeHtml(formatChartValue(tick, kind))}</text>
+          `;
+        }).join("");
+      }
+      function averageLineMarkup(points, bounds, width, height, padLeft, padRight, padTop, padBottom, color, kind, opacity = 0.36) {
+        const avg = averageValue(points);
+        if (avg == null) return "";
+        const y = chartY(avg, bounds, height, padTop, padBottom);
+        const label = escapeHtml(formatChartValue(avg, kind));
+        return `
+          <line x1="${padLeft}" x2="${width - padRight}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}" stroke="${color}" stroke-opacity="${opacity}" stroke-width="1.2" stroke-dasharray="6 5" />
+          <text x="${width - padRight - 4}" y="${(y - 4).toFixed(1)}" text-anchor="end" fill="${color}" opacity="0.78" font-size="10">${label}</text>
+        `;
+      }
+      function installChartHover(root, plot) {
+        const svg = root.querySelector("svg");
+        const layer = root.querySelector("[data-hover-layer]");
+        const line = root.querySelector("[data-hover-line]");
+        const circles = [...root.querySelectorAll("[data-hover-circle]")];
+        const tooltip = root.querySelector(".chart-tooltip");
+        if (!svg || !layer || !line || !tooltip || !Array.isArray(plot.series)) return;
+        const nearestPoint = (points, viewX) => {
+          let best = null;
+          for (const point of points) {
+            if (!best || Math.abs(point.x - viewX) < Math.abs(best.x - viewX)) best = point;
+          }
+          return best;
+        };
+        root.onpointermove = (event) => {
+          const rect = root.getBoundingClientRect();
+          if (rect.width <= 0 || rect.height <= 0) return;
+          const viewX = Math.min(plot.width, Math.max(0, ((event.clientX - rect.left) / rect.width) * plot.width));
+          const matches = plot.series.map((series) => ({ series, point: nearestPoint(series.points, viewX) })).filter((item) => item.point);
+          if (matches.length === 0) return;
+          const anchor = matches.reduce((best, item) => Math.abs(item.point.x - viewX) < Math.abs(best.point.x - viewX) ? item : best, matches[0]).point;
+          line.setAttribute("x1", anchor.x.toFixed(1));
+          line.setAttribute("x2", anchor.x.toFixed(1));
+          line.setAttribute("y1", String(plot.padTop));
+          line.setAttribute("y2", String(plot.height - plot.padBottom));
+          circles.forEach((circle, idx) => {
+            const item = matches[idx];
+            if (!item) { circle.setAttribute("opacity", "0"); return; }
+            circle.setAttribute("cx", item.point.x.toFixed(1));
+            circle.setAttribute("cy", item.point.y.toFixed(1));
+            circle.setAttribute("stroke", item.series.color);
+            circle.setAttribute("fill", "var(--bg-card)");
+            circle.setAttribute("opacity", "1");
+          });
+          const time = anchor.ts ? fmtDateTime(anchor.ts) : "";
+          tooltip.innerHTML = `
+            <div class="time">${escapeHtml(time)}</div>
+            ${matches.map((item) => `
+              <div class="row">
+                <span><span class="swatch" style="background:${escapeHtml(item.series.color)}"></span>${escapeHtml(item.series.label)}</span>
+                <strong>${escapeHtml(formatChartValue(item.point.value, item.series.kind))}</strong>
+              </div>
+            `).join("")}
+          `;
+          const tooltipLeft = Math.min(rect.width - 74, Math.max(74, (anchor.x / plot.width) * rect.width));
+          const tooltipTop = Math.max(34, (Math.min(...matches.map((item) => item.point.y)) / plot.height) * rect.height);
+          tooltip.style.left = `${tooltipLeft}px`;
+          tooltip.style.top = `${tooltipTop}px`;
+          tooltip.hidden = false;
+          layer.setAttribute("opacity", "1");
+        };
+        root.onpointerleave = () => {
+          layer.setAttribute("opacity", "0");
+          tooltip.hidden = true;
+        };
+      }
       function smoothPath(coords) {
         if (!coords.length) return "";
         if (coords.length === 1) {
@@ -1311,38 +1454,47 @@
           return;
         }
         const values = numeric.map((p) => Number(p.value));
-        const bounds = chartBounds(values, options.clipSpikes);
-        const span = Math.max(bounds.displayMax - bounds.displayMin, 1);
+        const kind = options.valueKind || "number";
+        const bounds = chartDisplayBounds(values, options);
         const width = options.width || 600;
         const height = options.height || 180;
-        const padX = 6;
-        const padY = 14;
+        const padLeft = options.padLeft || 48;
+        const padRight = 14;
+        const padTop = 12;
+        const padBottom = 20;
         const coords = numeric.map((point, idx) => {
-          const v = Math.min(Math.max(Number(point.value), bounds.displayMin), bounds.displayMax);
-          const x = padX + ((width - padX * 2) * idx) / Math.max(numeric.length - 1, 1);
-          const y = height - padY - ((v - bounds.displayMin) / span) * (height - padY * 2);
-          return [x, y];
+          const x = padLeft + ((width - padLeft - padRight) * idx) / Math.max(numeric.length - 1, 1);
+          const y = chartY(point.value, bounds, height, padTop, padBottom);
+          return { x, y, value: Number(point.value), ts: point.ts };
         });
-        const line = smoothPath(coords);
-        const area = `${line}L ${width - padX},${height} L ${padX},${height} Z`;
-        const avg = averageValue(numeric);
-        const avgMarkup = avg == null ? "" : (() => {
-          const clampedAvg = Math.min(Math.max(avg, bounds.displayMin), bounds.displayMax);
-          const y = height - padY - ((clampedAvg - bounds.displayMin) / span) * (height - padY * 2);
-          return `<line x1="${padX}" x2="${width - padX}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}" stroke="${color}" stroke-opacity="0.36" stroke-width="1.2" stroke-dasharray="6 5" />`;
-        })();
+        const line = smoothPath(coords.map((point) => [point.x, point.y]));
+        const area = `${line}L ${width - padRight},${height - padBottom} L ${padLeft},${height - padBottom} Z`;
+        const grid = chartGridMarkup(bounds, width, height, padLeft, padRight, padTop, padBottom, kind);
+        const avgMarkup = averageLineMarkup(numeric, bounds, width, height, padLeft, padRight, padTop, padBottom, color, kind);
         const gradId = `gradArea-${Math.abs(hashString(color + width)).toString(36)}`;
-        root.innerHTML = `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" aria-hidden="true">
+        root.innerHTML = `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" aria-hidden="true" style="color:var(--text-muted)">
           <defs>
             <linearGradient id="${gradId}" x1="0" y1="0" x2="0" y2="1">
               <stop offset="0%" stop-color="${color}" stop-opacity="0.32" />
               <stop offset="100%" stop-color="${color}" stop-opacity="0" />
             </linearGradient>
           </defs>
+          ${grid}
           <path d="${area}" fill="url(#${gradId})" />
           ${avgMarkup}
           <path d="${line}" fill="none" stroke="${color}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
-        </svg>`;
+          <g data-hover-layer opacity="0">
+            <line data-hover-line x1="0" x2="0" y1="${padTop}" y2="${height - padBottom}" stroke="currentColor" stroke-opacity="0.46" stroke-width="1" />
+            <circle data-hover-circle r="4" stroke-width="2" opacity="0" />
+          </g>
+        </svg><div class="chart-tooltip" hidden></div>`;
+        installChartHover(root, {
+          width,
+          height,
+          padTop,
+          padBottom,
+          series: [{ label: options.label || "", color, kind, points: coords }],
+        });
       }
       function drawMultiAreaChart(target, series, options = {}) {
         const root = typeof target === "string" ? document.getElementById(target) : target;
@@ -1357,34 +1509,42 @@
           root.innerHTML = `<div class="placeholder" style="border:none;padding:20px">${escapeHtml(t("node.no_numeric_history"))}</div>`;
           return;
         }
-        const bounds = chartBounds(allValues, options.clipSpikes);
-        const span = Math.max(bounds.displayMax - bounds.displayMin, 1);
+        const kind = options.valueKind || "number";
+        const bounds = chartDisplayBounds(allValues.map(Number), options);
         const width = options.width || 600;
         const height = options.height || 180;
-        const padX = 6;
-        const padY = 14;
+        const padLeft = options.padLeft || 48;
+        const padRight = 14;
+        const padTop = 12;
+        const padBottom = 20;
         const longest = Math.max(...valid.map((s) => s.points.length));
+        const hoverSeries = [];
         const lines = valid
-          .map((s) => {
+          .map((s, seriesIndex) => {
             const coords = [];
             s.points.forEach((point, idx) => {
               if (point.value == null || !Number.isFinite(Number(point.value))) return;
-              const v = Math.min(Math.max(Number(point.value), bounds.displayMin), bounds.displayMax);
-              const x = padX + ((width - padX * 2) * idx) / Math.max(longest - 1, 1);
-              const y = height - padY - ((v - bounds.displayMin) / span) * (height - padY * 2);
-              coords.push([x, y]);
+              const x = padLeft + ((width - padLeft - padRight) * idx) / Math.max(longest - 1, 1);
+              const y = chartY(point.value, bounds, height, padTop, padBottom);
+              coords.push({ x, y, value: Number(point.value), ts: point.ts });
             });
-            const path = smoothPath(coords);
-            const avg = averageValue(s.points);
-            const avgMarkup = avg == null ? "" : (() => {
-              const clampedAvg = Math.min(Math.max(avg, bounds.displayMin), bounds.displayMax);
-              const y = height - padY - ((clampedAvg - bounds.displayMin) / span) * (height - padY * 2);
-              return `<line x1="${padX}" x2="${width - padX}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}" stroke="${s.color}" stroke-opacity="0.30" stroke-width="1.1" stroke-dasharray="6 5" />`;
-            })();
+            hoverSeries.push({ label: s.label || `#${seriesIndex + 1}`, color: s.color, kind, points: coords });
+            const path = smoothPath(coords.map((point) => [point.x, point.y]));
+            const avgMarkup = averageLineMarkup(s.points, bounds, width, height, padLeft, padRight, padTop, padBottom, s.color, kind, 0.30);
             return `${avgMarkup}<path d="${path}" fill="none" stroke="${s.color}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />`;
           })
           .join("");
-        root.innerHTML = `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" aria-hidden="true">${lines}</svg>`;
+        const grid = chartGridMarkup(bounds, width, height, padLeft, padRight, padTop, padBottom, kind);
+        const hoverCircles = hoverSeries.map(() => `<circle data-hover-circle r="4" stroke-width="2" opacity="0" />`).join("");
+        root.innerHTML = `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" aria-hidden="true" style="color:var(--text-muted)">
+          ${grid}
+          ${lines}
+          <g data-hover-layer opacity="0">
+            <line data-hover-line x1="0" x2="0" y1="${padTop}" y2="${height - padBottom}" stroke="currentColor" stroke-opacity="0.46" stroke-width="1" />
+            ${hoverCircles}
+          </g>
+        </svg><div class="chart-tooltip" hidden></div>`;
+        installChartHover(root, { width, height, padTop, padBottom, series: hoverSeries });
       }
 
       function hashString(value) {
@@ -1395,23 +1555,23 @@
 
       function renderOverviewCharts(history) {
         const chartHistory = aggregateHistory(history);
-        const cpuPts = chartHistory.map((p) => ({ value: p.cpu_usage_percent }));
-        const memPts = chartHistory.map((p) => ({ value: p.memory_used_percent }));
-        const dlPts = chartHistory.map((p) => ({ value: p.rx_bytes_per_sec }));
-        const upPts = chartHistory.map((p) => ({ value: p.tx_bytes_per_sec }));
-        const rttPts = chartHistory.map((p) => ({ value: p.latency_ms }));
-        drawAreaChart("chart-cpu", cpuPts, "var(--chart-cpu)", { clipSpikes: chartState.clipSpikes.cpu });
-        drawAreaChart("chart-memory", memPts, "var(--chart-memory)", { clipSpikes: chartState.clipSpikes.memory });
+        const cpuPts = chartPoints(chartHistory, "cpu_usage_percent");
+        const memPts = chartPoints(chartHistory, "memory_used_percent");
+        const dlPts = chartPoints(chartHistory, "rx_bytes_per_sec");
+        const upPts = chartPoints(chartHistory, "tx_bytes_per_sec");
+        const rttPts = chartPoints(chartHistory, "latency_ms");
+        drawAreaChart("chart-cpu", cpuPts, "var(--chart-cpu)", { clipSpikes: chartState.clipSpikes.cpu, valueKind: "percent", minValue: 0, label: t("node.cpu_usage") });
+        drawAreaChart("chart-memory", memPts, "var(--chart-memory)", { clipSpikes: chartState.clipSpikes.memory, valueKind: "percent", minValue: 0, label: t("node.memory_usage") });
         drawMultiAreaChart("chart-network", [
-          { color: "var(--chart-network-down)", points: dlPts },
-          { color: "var(--chart-network-up)", points: upPts },
-        ], { clipSpikes: chartState.clipSpikes.network });
-        drawAreaChart("chart-rtt", rttPts, "var(--chart-latency)", { clipSpikes: chartState.clipSpikes.latency, height: 70 });
+          { color: "var(--chart-network-down)", label: t("index.node.download"), points: dlPts },
+          { color: "var(--chart-network-up)", label: t("index.node.upload"), points: upPts },
+        ], { clipSpikes: chartState.clipSpikes.network, valueKind: "rate", minValue: 0 });
+        drawAreaChart("chart-rtt", rttPts, "var(--chart-latency)", { clipSpikes: chartState.clipSpikes.latency, valueKind: "latency", minValue: 0, label: t("node.latency_history"), height: 70 });
         if (document.getElementById("network-only-chart")) {
           drawMultiAreaChart("network-only-chart", [
-            { color: "var(--chart-network-down)", points: dlPts },
-            { color: "var(--chart-network-up)", points: upPts },
-          ], { clipSpikes: chartState.clipSpikes.network, height: 240 });
+            { color: "var(--chart-network-down)", label: t("index.node.download"), points: dlPts },
+            { color: "var(--chart-network-up)", label: t("index.node.upload"), points: upPts },
+          ], { clipSpikes: chartState.clipSpikes.network, valueKind: "rate", minValue: 0, height: 240 });
         }
         renderTimeAxis("axis-cpu", chartHistory);
         renderTimeAxis("axis-memory", chartHistory);
@@ -1421,18 +1581,18 @@
       function renderBigCharts(history) {
         if (activeTab !== "monitor") return;
         const chartHistory = aggregateHistory(history);
-        const cpuPts = chartHistory.map((p) => ({ value: p.cpu_usage_percent }));
-        const memPts = chartHistory.map((p) => ({ value: p.memory_used_percent }));
-        const dlPts = chartHistory.map((p) => ({ value: p.rx_bytes_per_sec }));
-        const upPts = chartHistory.map((p) => ({ value: p.tx_bytes_per_sec }));
-        const rttPts = chartHistory.map((p) => ({ value: p.latency_ms }));
-        drawAreaChart("big-chart-cpu", cpuPts, "var(--chart-cpu)", { clipSpikes: chartState.clipSpikes.cpu, height: 220 });
-        drawAreaChart("big-chart-memory", memPts, "var(--chart-memory)", { clipSpikes: chartState.clipSpikes.memory, height: 220 });
+        const cpuPts = chartPoints(chartHistory, "cpu_usage_percent");
+        const memPts = chartPoints(chartHistory, "memory_used_percent");
+        const dlPts = chartPoints(chartHistory, "rx_bytes_per_sec");
+        const upPts = chartPoints(chartHistory, "tx_bytes_per_sec");
+        const rttPts = chartPoints(chartHistory, "latency_ms");
+        drawAreaChart("big-chart-cpu", cpuPts, "var(--chart-cpu)", { clipSpikes: chartState.clipSpikes.cpu, valueKind: "percent", minValue: 0, label: t("node.cpu_usage"), height: 220 });
+        drawAreaChart("big-chart-memory", memPts, "var(--chart-memory)", { clipSpikes: chartState.clipSpikes.memory, valueKind: "percent", minValue: 0, label: t("node.memory_usage"), height: 220 });
         drawMultiAreaChart("big-chart-network", [
-          { color: "var(--chart-network-down)", points: dlPts },
-          { color: "var(--chart-network-up)", points: upPts },
-        ], { clipSpikes: chartState.clipSpikes.network, height: 220 });
-        drawAreaChart("big-chart-latency", rttPts, "var(--chart-latency)", { clipSpikes: chartState.clipSpikes.latency, height: 220 });
+          { color: "var(--chart-network-down)", label: t("index.node.download"), points: dlPts },
+          { color: "var(--chart-network-up)", label: t("index.node.upload"), points: upPts },
+        ], { clipSpikes: chartState.clipSpikes.network, valueKind: "rate", minValue: 0, height: 220 });
+        drawAreaChart("big-chart-latency", rttPts, "var(--chart-latency)", { clipSpikes: chartState.clipSpikes.latency, valueKind: "latency", minValue: 0, label: t("node.latency_history"), height: 220 });
       }
 
       function renderTimeAxis(id, history) {
@@ -1607,8 +1767,10 @@
         const endMs = bounds.endMs;
         const startMs = Math.max(bounds.startMs, endMs - preset.hours * 3600 * 1000);
         if (!updateSelection(startMs, endMs, preset.key)) return;
-        latestHistory = filterHistoryBySelection(overviewHistory);
-        rerenderNode();
+        if (shouldFetch || latestHistory.length === 0) {
+          latestHistory = filterHistoryBySelection(overviewHistory);
+        }
+        if (shouldFetch) rerenderNode();
         if (shouldFetch) void fetchDetailHistory();
       }
       function ensureSelectionState() {
@@ -1634,9 +1796,14 @@
           latestHistory = filterHistoryBySelection(overviewHistory);
         }
       }
-      async function fetchDetailHistory() {
+      async function fetchDetailHistory(options = {}) {
         const sel = clampSelection(chartState.selectedStartMs, chartState.selectedEndMs);
-        if (!sel) { latestHistory = []; rerenderNode(); return; }
+        const shouldRender = options.render !== false;
+        if (!sel) {
+          latestHistory = [];
+          if (shouldRender) rerenderNode();
+          return;
+        }
         const requestVersion = ++detailRequestVersion;
         const params = new URLSearchParams({
           start: String(Math.floor(sel.startMs / 1000)),
@@ -1652,7 +1819,7 @@
           if (requestVersion !== detailRequestVersion) return;
           latestHistory = filterHistoryBySelection(overviewHistory);
         }
-        renderBigCharts(displayedHistory());
+        if (shouldRender) rerenderNode();
       }
       function beginBrushDrag(mode, event) {
         const bounds = historyBounds(overviewHistory);
@@ -1771,8 +1938,8 @@
           latestHistory = [];
         }
         ensureSelectionState();
+        await fetchDetailHistory({ render: false });
         rerenderNode();
-        await fetchDetailHistory();
         scheduleRefresh();
       }
       async function init() {
