@@ -302,8 +302,9 @@
         aspect-ratio: 16 / 8;
         min-height: 280px;
         background:
-          radial-gradient(circle at 20% 30%, rgba(59,130,246,0.06), transparent 60%),
-          radial-gradient(circle at 80% 70%, rgba(168,85,247,0.05), transparent 65%);
+          radial-gradient(circle at 20% 30%, rgba(59,130,246,0.09), transparent 55%),
+          radial-gradient(circle at 78% 62%, rgba(34,197,94,0.06), transparent 52%),
+          linear-gradient(135deg, rgba(15,23,42,0.18), rgba(30,41,59,0.04));
         border-radius: 14px;
         overflow: hidden;
       }
@@ -320,6 +321,15 @@
         inset: 0;
         width: 100%;
         height: 100%;
+        filter: drop-shadow(0 18px 36px rgba(0,0,0,0.22));
+      }
+      .map-land {
+        fill: rgba(76, 96, 128, 0.34);
+        stroke: rgba(148, 163, 184, 0.16);
+        stroke-width: 1.4;
+      }
+      .map-land.dense {
+        fill: rgba(96, 116, 148, 0.22);
       }
       .map-dot {
         position: absolute;
@@ -616,13 +626,14 @@
                     <circle cx="2" cy="2" r="1.1" fill="currentColor" opacity="0.32" />
                   </pattern>
                 </defs>
-                <g color="#3b82f6">
-                  <path d="M150,140 Q190,120 250,135 Q300,150 320,180 Q310,210 260,225 Q210,235 175,215 Q140,195 150,140 Z" fill="url(#dotsPattern)" />
-                  <path d="M165,250 Q200,260 220,290 Q235,335 215,375 Q195,395 175,380 Q155,350 155,310 Q150,280 165,250 Z" fill="url(#dotsPattern)" />
-                  <path d="M360,150 Q430,120 530,140 Q610,160 640,200 Q610,230 560,235 Q500,230 440,220 Q380,210 360,150 Z" fill="url(#dotsPattern)" />
-                  <path d="M450,240 Q540,260 610,310 Q600,360 540,400 Q480,420 440,380 Q420,330 450,240 Z" fill="url(#dotsPattern)" />
-                  <path d="M620,150 Q740,150 840,170 Q860,210 820,250 Q740,270 660,260 Q620,230 620,150 Z" fill="url(#dotsPattern)" />
-                  <path d="M820,330 Q880,330 920,360 Q920,400 870,410 Q830,400 815,375 Q810,350 820,330 Z" fill="url(#dotsPattern)" />
+                <g color="#64748b">
+                  <path class="map-land" d="M113,147 C136,119 184,103 228,112 C276,122 313,150 331,187 C315,213 281,227 238,226 C197,225 151,211 126,188 C111,174 104,160 113,147 Z" />
+                  <path class="map-land dense" d="M153,234 C188,232 221,252 234,286 C246,321 232,365 205,397 C183,385 166,351 161,312 C157,281 140,253 153,234 Z" />
+                  <path class="map-land" d="M366,139 C417,113 501,112 573,132 C638,150 669,181 659,211 C622,232 560,235 495,224 C433,214 382,194 366,165 C359,154 358,146 366,139 Z" />
+                  <path class="map-land dense" d="M454,236 C507,242 575,275 613,318 C609,365 556,405 501,405 C463,391 440,352 438,307 C437,276 442,252 454,236 Z" />
+                  <path class="map-land" d="M611,132 C684,113 793,132 862,169 C882,202 857,239 801,257 C735,278 667,262 631,227 C609,199 598,160 611,132 Z" />
+                  <path class="map-land dense" d="M808,332 C855,319 914,344 931,382 C910,414 858,420 825,395 C803,378 796,351 808,332 Z" />
+                  <path class="map-land dense" d="M469,103 C490,88 527,92 545,113 C520,123 489,122 469,103 Z" />
                 </g>
               </svg>
               <div id="map-dots"></div>
@@ -710,6 +721,10 @@
       const LANGUAGE_STORAGE_KEY = "ximonitor.ui.language";
       const THEME_STORAGE_KEY = "ximonitor.ui.theme";
       const LATENCY_WARN_MS = 200;
+      const HOME_SPARK_WINDOW_HOURS = 3;
+      const HOME_SPARK_MAX_POINTS = 180;
+      const HOME_SPARK_NODE_LIMIT = 48;
+      const HOME_SPARK_BUCKET_MS = 60 * 1000;
       let I18N = { en: { __label: "English" } };
       let currentLanguage = "en";
       let latestOverview = null;
@@ -848,6 +863,13 @@
       function fmtDateTime(value) {
         return new Date(value).toLocaleString(currentLanguage);
       }
+      function normalizeHistory(history) {
+        if (!Array.isArray(history)) return [];
+        return history
+          .map((point) => ({ ...point, _ts: Date.parse(point.recorded_at) }))
+          .filter((point) => Number.isFinite(point._ts))
+          .sort((left, right) => left._ts - right._ts);
+      }
       function fmtRelative(timestamp) {
         if (!timestamp) return t("common.waiting_for_data");
         const diffMs = Date.now() - new Date(timestamp).getTime();
@@ -941,15 +963,44 @@
           .join("");
       }
 
-      function pushSparkPoint(nodeId, cpuPercent) {
-        const points = sparkHistory.get(nodeId) || [];
-        const numeric = Number(cpuPercent);
-        if (Number.isFinite(numeric)) {
-          points.push(numeric);
-          while (points.length > 24) points.shift();
+      function aggregateSeries(history, field, bucketMs = HOME_SPARK_BUCKET_MS) {
+        if (!Array.isArray(history) || history.length === 0) return [];
+        const buckets = new Map();
+        for (const point of history) {
+          const value = Number(point[field]);
+          if (!Number.isFinite(value)) continue;
+          const bucket = Math.floor(point._ts / bucketMs) * bucketMs;
+          const item = buckets.get(bucket) || { sum: 0, count: 0 };
+          item.sum += value;
+          item.count += 1;
+          buckets.set(bucket, item);
         }
-        sparkHistory.set(nodeId, points);
-        return points;
+        return [...buckets.entries()]
+          .sort((left, right) => left[0] - right[0])
+          .map(([, item]) => item.sum / item.count);
+      }
+      async function refreshSparkHistories(nodes) {
+        const limited = nodes.slice(0, HOME_SPARK_NODE_LIMIT);
+        await Promise.all(limited.map(async (node) => {
+          const nodeId = node.identity.node_id;
+          const params = new URLSearchParams({
+            window_hours: String(HOME_SPARK_WINDOW_HOURS),
+            max_points: String(HOME_SPARK_MAX_POINTS)
+          });
+          try {
+            const history = normalizeHistory(await fetchJson(`/api/nodes/${encodeURIComponent(nodeId)}/history?${params.toString()}`));
+            sparkHistory.set(nodeId, history);
+          } catch (error) {
+            console.warn("failed to refresh node spark history", nodeId, error);
+          }
+        }));
+      }
+      function nodeSparkPoints(node) {
+        const history = sparkHistory.get(node.identity.node_id);
+        const points = aggregateSeries(history, "cpu_usage_percent");
+        if (points.length > 0) return points;
+        const current = Number(node.snapshot?.cpu_usage_percent);
+        return Number.isFinite(current) ? [current] : [];
       }
       function sparklineSvg(points, color) {
         if (!Array.isArray(points) || points.length < 2) {
@@ -962,14 +1013,13 @@
         const max = Math.max(...points);
         const span = Math.max(max - min, 1);
         const stepX = w / (points.length - 1);
-        let line = "";
-        let area = "";
-        points.forEach((value, idx) => {
+        const coords = points.map((value, idx) => {
           const x = idx * stepX;
           const y = h - padY - ((value - min) / span) * (h - padY * 2);
-          line += `${idx === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)} `;
+          return [x, y];
         });
-        area = `${line} L ${w},${h} L 0,${h} Z`;
+        const line = smoothPath(coords);
+        const area = `${line} L ${w},${h} L 0,${h} Z`;
         return `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-hidden="true">
           <defs>
             <linearGradient id="sparkGrad-${color.replace(/[^a-z0-9]/gi, "")}" x1="0" y1="0" x2="0" y2="1">
@@ -985,6 +1035,26 @@
         if (status === "offline") return "#ef4444";
         if (status === "latency") return "#eab308";
         return "#22c55e";
+      }
+      function smoothPath(coords) {
+        if (!coords.length) return "";
+        if (coords.length === 1) {
+          const [x, y] = coords[0];
+          return `M${x.toFixed(1)},${y.toFixed(1)}`;
+        }
+        let path = `M${coords[0][0].toFixed(1)},${coords[0][1].toFixed(1)}`;
+        for (let i = 0; i < coords.length - 1; i++) {
+          const p0 = coords[i - 1] || coords[i];
+          const p1 = coords[i];
+          const p2 = coords[i + 1];
+          const p3 = coords[i + 2] || p2;
+          const cp1x = p1[0] + (p2[0] - p0[0]) / 6;
+          const cp1y = p1[1] + (p2[1] - p0[1]) / 6;
+          const cp2x = p2[0] - (p3[0] - p1[0]) / 6;
+          const cp2y = p2[1] - (p3[1] - p1[1]) / 6;
+          path += ` C${cp1x.toFixed(1)},${cp1y.toFixed(1)} ${cp2x.toFixed(1)},${cp2y.toFixed(1)} ${p2[0].toFixed(1)},${p2[1].toFixed(1)}`;
+        }
+        return path;
       }
 
       function renderStats(overview) {
@@ -1070,7 +1140,7 @@
         const memory = snapshot.memory || {};
         const status = nodeStatusKey(node);
         const sparkColor = sparklineColor(status);
-        const points = sparkHistory.get(node.identity.node_id) || [];
+        const points = nodeSparkPoints(node);
         const cpu = snapshot.cpu_usage_percent;
         const load = snapshot.load?.one;
         const label = node.identity.node_label || node.identity.node_id;
@@ -1126,7 +1196,7 @@
           ]);
           latestOverview = overview;
           latestNodes = nodes;
-          nodes.forEach((n) => pushSparkPoint(n.identity.node_id, n.snapshot?.cpu_usage_percent));
+          await refreshSparkHistories(nodes);
           renderStats(overview);
           renderUpdated(overview);
           renderMapDots(nodes);

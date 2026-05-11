@@ -288,6 +288,11 @@
         font-weight: 600;
         color: var(--text-primary);
       }
+      .panel-actions {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+      }
 
       /* Server info card spans 2 rows */
       .info-card { grid-column: span 1; grid-row: span 2; padding: 18px 20px; }
@@ -321,6 +326,7 @@
       }
 
       .small-card { display: flex; flex-direction: column; gap: 6px; padding: 14px 16px; }
+      .small-card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
       .small-card .label { color: var(--text-muted); font-size: 12px; }
       .small-card .value { font-size: 22px; font-weight: 600; }
       .small-card.progress .progress-bar {
@@ -405,6 +411,20 @@
         font-weight: 500;
       }
       .toggle-button.active {
+        background: var(--accent-blue-soft);
+        color: var(--accent-blue);
+        border-color: rgba(59,130,246,0.32);
+      }
+      .chart-clip-toggle {
+        border: 1px solid var(--border-soft);
+        background: var(--bg-card-soft);
+        color: var(--text-muted);
+        border-radius: 999px;
+        padding: 4px 9px;
+        font-size: 11px;
+        font-weight: 500;
+      }
+      .chart-clip-toggle.active {
         background: var(--accent-blue-soft);
         color: var(--accent-blue);
         border-color: rgba(59,130,246,0.32);
@@ -624,7 +644,10 @@
             <article class="panel chart-card">
               <div class="panel-head">
                 <div class="panel-title" data-i18n="node.cpu_usage">CPU Usage</div>
-                <div class="panel-meta" id="now-cpu">--</div>
+                <div class="panel-actions">
+                  <button type="button" class="chart-clip-toggle" data-clip-chart="cpu"></button>
+                  <div class="panel-meta" id="now-cpu">--</div>
+                </div>
               </div>
               <div class="chart-stage" id="chart-cpu"></div>
               <div class="chart-axis" id="axis-cpu"></div>
@@ -633,7 +656,10 @@
             <article class="panel chart-card">
               <div class="panel-head">
                 <div class="panel-title" data-i18n="node.memory_usage">Memory Usage</div>
-                <div class="panel-meta" id="now-memory">--</div>
+                <div class="panel-actions">
+                  <button type="button" class="chart-clip-toggle" data-clip-chart="memory"></button>
+                  <div class="panel-meta" id="now-memory">--</div>
+                </div>
               </div>
               <div class="chart-stage" id="chart-memory"></div>
               <div class="chart-axis" id="axis-memory"></div>
@@ -642,7 +668,10 @@
             <article class="panel chart-card">
               <div class="panel-head">
                 <div class="panel-title" data-i18n="node.network_traffic">Network Traffic</div>
-                <div class="panel-meta" id="now-network">--</div>
+                <div class="panel-actions">
+                  <button type="button" class="chart-clip-toggle" data-clip-chart="network"></button>
+                  <div class="panel-meta" id="now-network">--</div>
+                </div>
               </div>
               <div class="chart-stage" id="chart-network"></div>
               <div class="chart-axis" id="axis-network"></div>
@@ -662,7 +691,10 @@
             </article>
 
             <article class="panel small-card">
-              <div class="label" data-i18n="node.latency_history">RTT</div>
+              <div class="small-card-head">
+                <div class="label" data-i18n="node.latency_history">RTT</div>
+                <button type="button" class="chart-clip-toggle" data-clip-chart="latency"></button>
+              </div>
               <div class="value" id="latency-value">--</div>
               <div class="chart-stage" style="min-height:50px;margin-top:0" id="chart-rtt"></div>
             </article>
@@ -680,7 +712,6 @@
               </div>
               <div class="controls-actions">
                 <div class="preset-group" id="history-presets"></div>
-                <button type="button" class="toggle-button" id="peak-clip-toggle">Clip Spikes: Off</button>
               </div>
             </div>
             <div class="brush-shell">
@@ -701,24 +732,28 @@
             <article class="chart-large">
               <div class="panel-head">
                 <div class="panel-title" data-i18n="node.cpu_usage">CPU Usage</div>
+                <button type="button" class="chart-clip-toggle" data-clip-chart="cpu"></button>
               </div>
               <div class="chart-stage" id="big-chart-cpu"></div>
             </article>
             <article class="chart-large">
               <div class="panel-head">
                 <div class="panel-title" data-i18n="node.memory_usage">Memory Usage</div>
+                <button type="button" class="chart-clip-toggle" data-clip-chart="memory"></button>
               </div>
               <div class="chart-stage" id="big-chart-memory"></div>
             </article>
             <article class="chart-large">
               <div class="panel-head">
                 <div class="panel-title" data-i18n="node.network_traffic">Network Traffic</div>
+                <button type="button" class="chart-clip-toggle" data-clip-chart="network"></button>
               </div>
               <div class="chart-stage" id="big-chart-network"></div>
             </article>
             <article class="chart-large">
               <div class="panel-head">
                 <div class="panel-title" data-i18n="node.latency_history">WebSocket RTT</div>
+                <button type="button" class="chart-clip-toggle" data-clip-chart="latency"></button>
               </div>
               <div class="chart-stage" id="big-chart-latency"></div>
             </article>
@@ -746,6 +781,7 @@
           <article class="panel chart-card" style="margin-top:14px;min-height:280px">
             <div class="panel-head">
               <div class="panel-title" data-i18n="node.network_traffic">Network Traffic</div>
+              <button type="button" class="chart-clip-toggle" data-clip-chart="network"></button>
             </div>
             <div class="chart-stage" id="network-only-chart" style="min-height:240px"></div>
           </article>
@@ -806,6 +842,7 @@
       const MIN_SELECTION_MS = 30 * 60 * 1000;
       const CUSTOM_PRESET_KEY = "custom";
       const PRESET_WINDOWS = [
+        { key: "last_3h", hours: 3 },
         { key: "last_24h", hours: 24 },
         { key: "last_3d", hours: 72 },
         { key: "last_7d", hours: 168 },
@@ -823,8 +860,13 @@
       let activeTab = "overview";
 
       const chartState = {
-        peakClipEnabled: false,
-        activePresetKey: "last_24h",
+        clipSpikes: {
+          cpu: true,
+          memory: true,
+          network: true,
+          latency: true,
+        },
+        activePresetKey: "last_3h",
         selectedStartMs: null,
         selectedEndMs: null
       };
@@ -1021,7 +1063,7 @@
           const m = String(tag).match(/^(?:ip|addr|address)[:=](.+)$/i);
           if (m) return m[1];
         }
-        return node.identity.hostname || null;
+        return node.remote_ip || null;
       }
 
       function renderHeader(node) {
@@ -1055,7 +1097,7 @@
       function renderInfo(node) {
         const snapshot = node.snapshot || {};
         const memory = snapshot.memory || {};
-        const disks = snapshot.disks || [];
+        const disks = uniqueDisks(snapshot.disks || []);
         const totalDiskBytes = disks.reduce((s, d) => s + (d.total_bytes || 0), 0);
         const cpuLine = node.identity.cpu_cores
           ? `${node.identity.cpu_cores ? t("node.info.cores", { count: node.identity.cpu_cores }) : ""}${node.identity.cpu_model ? " · " + node.identity.cpu_model : ""}`
@@ -1078,7 +1120,7 @@
       }
 
       function renderDisks(node) {
-        const disks = node.snapshot?.disks || [];
+        const disks = uniqueDisks(node.snapshot?.disks || []);
         const root = document.getElementById("disks");
         if (!disks.length) {
           root.innerHTML = `<div class="placeholder" style="padding:18px">${escapeHtml(t("node.no_disks"))}</div>`;
@@ -1110,7 +1152,7 @@
       function renderSummaryCards(node) {
         const snapshot = node.snapshot || {};
         const memory = snapshot.memory || {};
-        const disks = snapshot.disks || [];
+        const disks = uniqueDisks(snapshot.disks || []);
         const totalDiskBytes = disks.reduce((s, d) => s + (d.total_bytes || 0), 0);
         const usedDiskBytes = disks.reduce((s, d) => s + (d.used_bytes || 0), 0);
         const diskPct = totalDiskBytes ? (usedDiskBytes / totalDiskBytes) * 100 : null;
@@ -1151,6 +1193,16 @@
         }
       }
 
+      function uniqueDisks(disks) {
+        const seen = new Set();
+        return (Array.isArray(disks) ? disks : []).filter((disk) => {
+          const key = `${disk.device || ""}:${disk.total_bytes || 0}`;
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
+      }
+
       // ---------------- Chart drawing ----------------
       function quantile(values, ratio) {
         if (!Array.isArray(values) || values.length === 0) return null;
@@ -1172,6 +1224,80 @@
         }
         return { actualMin, actualMax, displayMin: actualMin, displayMax, clipped };
       }
+      function chartBucketMs() {
+        const span = selectionDurationMs();
+        if (span <= 6 * 3600 * 1000) return 30 * 1000;
+        if (span <= 24 * 3600 * 1000) return 60 * 1000;
+        if (span <= 3 * 24 * 3600 * 1000) return 5 * 60 * 1000;
+        if (span <= 7 * 24 * 3600 * 1000) return 15 * 60 * 1000;
+        return 30 * 60 * 1000;
+      }
+      function aggregateHistory(history, bucketMs = chartBucketMs()) {
+        if (!Array.isArray(history) || history.length === 0) return [];
+        const buckets = new Map();
+        for (const point of history) {
+          const bucket = Math.floor(point._ts / bucketMs) * bucketMs;
+          const item = buckets.get(bucket) || {
+            _ts: bucket,
+            cpu: { sum: 0, count: 0 },
+            memory: { sum: 0, count: 0 },
+            rx: { sum: 0, count: 0 },
+            tx: { sum: 0, count: 0 },
+            latency: { sum: 0, count: 0 },
+          };
+          addBucketValue(item.cpu, point.cpu_usage_percent);
+          addBucketValue(item.memory, point.memory_used_percent);
+          addBucketValue(item.rx, point.rx_bytes_per_sec);
+          addBucketValue(item.tx, point.tx_bytes_per_sec);
+          addBucketValue(item.latency, point.latency_ms);
+          buckets.set(bucket, item);
+        }
+        return [...buckets.values()]
+          .sort((left, right) => left._ts - right._ts)
+          .map((item) => ({
+            _ts: item._ts,
+            recorded_at: new Date(item._ts).toISOString(),
+            cpu_usage_percent: bucketAverage(item.cpu),
+            memory_used_percent: bucketAverage(item.memory),
+            rx_bytes_per_sec: bucketAverage(item.rx),
+            tx_bytes_per_sec: bucketAverage(item.tx),
+            latency_ms: bucketAverage(item.latency),
+          }));
+      }
+      function addBucketValue(bucket, value) {
+        const numeric = Number(value);
+        if (!Number.isFinite(numeric)) return;
+        bucket.sum += numeric;
+        bucket.count += 1;
+      }
+      function bucketAverage(bucket) {
+        return bucket.count > 0 ? bucket.sum / bucket.count : null;
+      }
+      function averageValue(points) {
+        const values = points.map((p) => Number(p.value)).filter(Number.isFinite);
+        if (values.length === 0) return null;
+        return values.reduce((sum, value) => sum + value, 0) / values.length;
+      }
+      function smoothPath(coords) {
+        if (!coords.length) return "";
+        if (coords.length === 1) {
+          const [x, y] = coords[0];
+          return `M${x.toFixed(1)},${y.toFixed(1)}`;
+        }
+        let path = `M${coords[0][0].toFixed(1)},${coords[0][1].toFixed(1)}`;
+        for (let i = 0; i < coords.length - 1; i++) {
+          const p0 = coords[i - 1] || coords[i];
+          const p1 = coords[i];
+          const p2 = coords[i + 1];
+          const p3 = coords[i + 2] || p2;
+          const cp1x = p1[0] + (p2[0] - p0[0]) / 6;
+          const cp1y = p1[1] + (p2[1] - p0[1]) / 6;
+          const cp2x = p2[0] - (p3[0] - p1[0]) / 6;
+          const cp2y = p2[1] - (p3[1] - p1[1]) / 6;
+          path += ` C${cp1x.toFixed(1)},${cp1y.toFixed(1)} ${cp2x.toFixed(1)},${cp2y.toFixed(1)} ${p2[0].toFixed(1)},${p2[1].toFixed(1)}`;
+        }
+        return path;
+      }
       function drawAreaChart(target, points, color, options = {}) {
         const root = typeof target === "string" ? document.getElementById(target) : target;
         if (!root) return;
@@ -1191,15 +1317,20 @@
         const height = options.height || 180;
         const padX = 6;
         const padY = 14;
-        let line = "";
-        let area = "";
-        numeric.forEach((point, idx) => {
+        const coords = numeric.map((point, idx) => {
           const v = Math.min(Math.max(Number(point.value), bounds.displayMin), bounds.displayMax);
           const x = padX + ((width - padX * 2) * idx) / Math.max(numeric.length - 1, 1);
           const y = height - padY - ((v - bounds.displayMin) / span) * (height - padY * 2);
-          line += `${idx === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)} `;
+          return [x, y];
         });
-        area = `${line}L ${width - padX},${height} L ${padX},${height} Z`;
+        const line = smoothPath(coords);
+        const area = `${line}L ${width - padX},${height} L ${padX},${height} Z`;
+        const avg = averageValue(numeric);
+        const avgMarkup = avg == null ? "" : (() => {
+          const clampedAvg = Math.min(Math.max(avg, bounds.displayMin), bounds.displayMax);
+          const y = height - padY - ((clampedAvg - bounds.displayMin) / span) * (height - padY * 2);
+          return `<line x1="${padX}" x2="${width - padX}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}" stroke="${color}" stroke-opacity="0.36" stroke-width="1.2" stroke-dasharray="6 5" />`;
+        })();
         const gradId = `gradArea-${Math.abs(hashString(color + width)).toString(36)}`;
         root.innerHTML = `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" aria-hidden="true">
           <defs>
@@ -1209,6 +1340,7 @@
             </linearGradient>
           </defs>
           <path d="${area}" fill="url(#${gradId})" />
+          ${avgMarkup}
           <path d="${line}" fill="none" stroke="${color}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
         </svg>`;
       }
@@ -1234,15 +1366,22 @@
         const longest = Math.max(...valid.map((s) => s.points.length));
         const lines = valid
           .map((s) => {
-            let path = "";
+            const coords = [];
             s.points.forEach((point, idx) => {
-              if (point.value == null) return;
+              if (point.value == null || !Number.isFinite(Number(point.value))) return;
               const v = Math.min(Math.max(Number(point.value), bounds.displayMin), bounds.displayMax);
               const x = padX + ((width - padX * 2) * idx) / Math.max(longest - 1, 1);
               const y = height - padY - ((v - bounds.displayMin) / span) * (height - padY * 2);
-              path += `${path ? "L" : "M"}${x.toFixed(1)},${y.toFixed(1)} `;
+              coords.push([x, y]);
             });
-            return `<path d="${path}" fill="none" stroke="${s.color}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />`;
+            const path = smoothPath(coords);
+            const avg = averageValue(s.points);
+            const avgMarkup = avg == null ? "" : (() => {
+              const clampedAvg = Math.min(Math.max(avg, bounds.displayMin), bounds.displayMax);
+              const y = height - padY - ((clampedAvg - bounds.displayMin) / span) * (height - padY * 2);
+              return `<line x1="${padX}" x2="${width - padX}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}" stroke="${s.color}" stroke-opacity="0.30" stroke-width="1.1" stroke-dasharray="6 5" />`;
+            })();
+            return `${avgMarkup}<path d="${path}" fill="none" stroke="${s.color}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />`;
           })
           .join("");
         root.innerHTML = `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" aria-hidden="true">${lines}</svg>`;
@@ -1255,43 +1394,45 @@
       }
 
       function renderOverviewCharts(history) {
-        const cpuPts = history.map((p) => ({ value: p.cpu_usage_percent }));
-        const memPts = history.map((p) => ({ value: p.memory_used_percent }));
-        const dlPts = history.map((p) => ({ value: p.rx_bytes_per_sec }));
-        const upPts = history.map((p) => ({ value: p.tx_bytes_per_sec }));
-        const rttPts = history.map((p) => ({ value: p.latency_ms }));
-        drawAreaChart("chart-cpu", cpuPts, "var(--chart-cpu)", { clipSpikes: chartState.peakClipEnabled });
-        drawAreaChart("chart-memory", memPts, "var(--chart-memory)", { clipSpikes: chartState.peakClipEnabled });
+        const chartHistory = aggregateHistory(history);
+        const cpuPts = chartHistory.map((p) => ({ value: p.cpu_usage_percent }));
+        const memPts = chartHistory.map((p) => ({ value: p.memory_used_percent }));
+        const dlPts = chartHistory.map((p) => ({ value: p.rx_bytes_per_sec }));
+        const upPts = chartHistory.map((p) => ({ value: p.tx_bytes_per_sec }));
+        const rttPts = chartHistory.map((p) => ({ value: p.latency_ms }));
+        drawAreaChart("chart-cpu", cpuPts, "var(--chart-cpu)", { clipSpikes: chartState.clipSpikes.cpu });
+        drawAreaChart("chart-memory", memPts, "var(--chart-memory)", { clipSpikes: chartState.clipSpikes.memory });
         drawMultiAreaChart("chart-network", [
           { color: "var(--chart-network-down)", points: dlPts },
           { color: "var(--chart-network-up)", points: upPts },
-        ], { clipSpikes: chartState.peakClipEnabled });
-        drawAreaChart("chart-rtt", rttPts, "var(--chart-latency)", { clipSpikes: chartState.peakClipEnabled, height: 70 });
+        ], { clipSpikes: chartState.clipSpikes.network });
+        drawAreaChart("chart-rtt", rttPts, "var(--chart-latency)", { clipSpikes: chartState.clipSpikes.latency, height: 70 });
         if (document.getElementById("network-only-chart")) {
           drawMultiAreaChart("network-only-chart", [
             { color: "var(--chart-network-down)", points: dlPts },
             { color: "var(--chart-network-up)", points: upPts },
-          ], { clipSpikes: chartState.peakClipEnabled, height: 240 });
+          ], { clipSpikes: chartState.clipSpikes.network, height: 240 });
         }
-        renderTimeAxis("axis-cpu", history);
-        renderTimeAxis("axis-memory", history);
-        renderTimeAxis("axis-network", history);
+        renderTimeAxis("axis-cpu", chartHistory);
+        renderTimeAxis("axis-memory", chartHistory);
+        renderTimeAxis("axis-network", chartHistory);
       }
 
       function renderBigCharts(history) {
         if (activeTab !== "monitor") return;
-        const cpuPts = history.map((p) => ({ value: p.cpu_usage_percent }));
-        const memPts = history.map((p) => ({ value: p.memory_used_percent }));
-        const dlPts = history.map((p) => ({ value: p.rx_bytes_per_sec }));
-        const upPts = history.map((p) => ({ value: p.tx_bytes_per_sec }));
-        const rttPts = history.map((p) => ({ value: p.latency_ms }));
-        drawAreaChart("big-chart-cpu", cpuPts, "var(--chart-cpu)", { clipSpikes: chartState.peakClipEnabled, height: 220 });
-        drawAreaChart("big-chart-memory", memPts, "var(--chart-memory)", { clipSpikes: chartState.peakClipEnabled, height: 220 });
+        const chartHistory = aggregateHistory(history);
+        const cpuPts = chartHistory.map((p) => ({ value: p.cpu_usage_percent }));
+        const memPts = chartHistory.map((p) => ({ value: p.memory_used_percent }));
+        const dlPts = chartHistory.map((p) => ({ value: p.rx_bytes_per_sec }));
+        const upPts = chartHistory.map((p) => ({ value: p.tx_bytes_per_sec }));
+        const rttPts = chartHistory.map((p) => ({ value: p.latency_ms }));
+        drawAreaChart("big-chart-cpu", cpuPts, "var(--chart-cpu)", { clipSpikes: chartState.clipSpikes.cpu, height: 220 });
+        drawAreaChart("big-chart-memory", memPts, "var(--chart-memory)", { clipSpikes: chartState.clipSpikes.memory, height: 220 });
         drawMultiAreaChart("big-chart-network", [
           { color: "var(--chart-network-down)", points: dlPts },
           { color: "var(--chart-network-up)", points: upPts },
-        ], { clipSpikes: chartState.peakClipEnabled, height: 220 });
-        drawAreaChart("big-chart-latency", rttPts, "var(--chart-latency)", { clipSpikes: chartState.peakClipEnabled, height: 220 });
+        ], { clipSpikes: chartState.clipSpikes.network, height: 220 });
+        drawAreaChart("big-chart-latency", rttPts, "var(--chart-latency)", { clipSpikes: chartState.clipSpikes.latency, height: 220 });
       }
 
       function renderTimeAxis(id, history) {
@@ -1413,13 +1554,17 @@
           chartState.selectedStartMs != null && chartState.selectedEndMs != null
             ? t("node.window.range", { start: fmtDateTime(chartState.selectedStartMs), end: fmtDateTime(chartState.selectedEndMs) })
             : "--";
-        const toggle = document.getElementById("peak-clip-toggle");
-        if (toggle) {
-          toggle.textContent = chartState.peakClipEnabled ? t("node.clip.on") : t("node.clip.off");
-          toggle.classList.toggle("active", chartState.peakClipEnabled);
-        }
+        syncChartClipButtons();
         renderPresetButtons();
         syncBrushSelection();
+      }
+      function syncChartClipButtons() {
+        document.querySelectorAll("[data-clip-chart]").forEach((button) => {
+          const chart = button.dataset.clipChart;
+          const enabled = Boolean(chartState.clipSpikes[chart]);
+          button.textContent = enabled ? t("node.clip.on_short") : t("node.clip.off_short");
+          button.classList.toggle("active", enabled);
+        });
       }
       function filterHistoryBySelection(history) {
         if (!Array.isArray(history) || history.length === 0) return [];
@@ -1479,7 +1624,7 @@
           return;
         }
         if (chartState.selectedStartMs == null || chartState.selectedEndMs == null) {
-          applyPresetWindow("last_24h", false);
+          applyPresetWindow("last_3h", false);
           return;
         }
         const sel = clampSelection(chartState.selectedStartMs, chartState.selectedEndMs);
@@ -1531,9 +1676,7 @@
             const nextStart = nextMs - activeBrushDrag.pointerOffsetMs;
             updateSelection(nextStart, nextStart + activeBrushDrag.selectionSpanMs, CUSTOM_PRESET_KEY);
           }
-          latestHistory = filterHistoryBySelection(overviewHistory);
           syncControls();
-          renderBigCharts(displayedHistory());
         };
         const onUp = () => {
           selEl.classList.remove("dragging");
@@ -1554,15 +1697,15 @@
             applyPresetWindow(target.dataset.presetKey, true);
           });
         }
-        const toggle = document.getElementById("peak-clip-toggle");
-        if (toggle) {
-          toggle.addEventListener("click", () => {
-            chartState.peakClipEnabled = !chartState.peakClipEnabled;
-            syncControls();
-            renderOverviewCharts(displayedHistory());
-            renderBigCharts(displayedHistory());
-          });
-        }
+        document.addEventListener("click", (e) => {
+          const toggle = e.target.closest("[data-clip-chart]");
+          if (!toggle) return;
+          const chart = toggle.dataset.clipChart;
+          chartState.clipSpikes[chart] = !chartState.clipSpikes[chart];
+          syncControls();
+          renderOverviewCharts(displayedHistory());
+          renderBigCharts(displayedHistory());
+        });
         const brushStage = document.getElementById("history-brush-stage");
         const brushSelection = document.getElementById("history-brush-selection");
         if (brushStage && brushSelection) {
