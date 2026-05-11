@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  lint-and-test:
+    name: Lint and Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup component add clippy rustfmt
+
+      - name: Install shellcheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+      - name: Run clippy
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+
+      - name: Run tests
+        run: cargo test --workspace --locked
+
+      - name: Shellcheck installers
+        run: shellcheck scripts/install-server.sh scripts/install-agent.sh
+
+  cross-build:
+    name: Cross Build ${{ matrix.target }}
+    needs: lint-and-test
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - x86_64-unknown-linux-musl
+          - aarch64-unknown-linux-musl
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - name: Install cross
+        run: cargo install cross --locked
+
+      - name: Disable local linker overrides for CI cross build
+        run: |
+          if [ -f .cargo/config.toml ]; then
+            mv .cargo/config.toml .cargo/config.toml.ci-bak
+          fi
+
+      - name: Cross build release binaries
+        run: |
+          cross build --locked --release --target "${{ matrix.target }}" \
+            -p ximonitor-server \
+            -p ximonitor-agent
