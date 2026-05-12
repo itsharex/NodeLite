@@ -1408,37 +1408,45 @@
           <text x="${(labelX + labelWidth - 6).toFixed(1)}" y="${(labelY - 3).toFixed(1)}" text-anchor="end" fill="${color}" opacity="0.88" font-size="11">${label}</text>
         `;
       }
-      function installChartHover(root, plot) {
+      function createHoverGroup() {
+        const charts = [];
+        return {
+          add(entry) { charts.push(entry); },
+          notify(ts, sourceRoot) { for (const c of charts) c.show(ts, sourceRoot); },
+          clear() { for (const c of charts) c.hide(); },
+        };
+      }
+      function installChartHover(root, plot, group) {
         const svg = root.querySelector("svg");
         const layer = root.querySelector("[data-hover-layer]");
         const line = root.querySelector("[data-hover-line]");
         const circles = [...root.querySelectorAll("[data-hover-circle]")];
         const tooltip = root.querySelector(".chart-tooltip");
         if (!svg || !layer || !line || !tooltip || !Array.isArray(plot.series)) return;
-        const nearestPoint = (points, viewX) => {
+        const nearestByKey = (points, target, getKey) => {
           if (points.length === 0) return null;
           let lo = 0, hi = points.length - 1;
           while (lo < hi) {
             const mid = (lo + hi) >> 1;
-            if (points[mid].x < viewX) lo = mid + 1; else hi = mid;
+            if (getKey(points[mid]) < target) lo = mid + 1; else hi = mid;
           }
           const right = points[lo];
           const left = lo > 0 ? points[lo - 1] : right;
-          return Math.abs(right.x - viewX) < Math.abs(left.x - viewX) ? right : left;
+          return Math.abs(getKey(right) - target) < Math.abs(getKey(left) - target) ? right : left;
         };
-        let pendingEvent = null;
-        let rafId = null;
-        const handleMove = () => {
-          rafId = null;
-          const event = pendingEvent;
-          pendingEvent = null;
-          if (!event) return;
+        const getX = (p) => p.x;
+        const getTs = (p) => p.ts;
+        const renderAt = (target, getKey) => {
           const rect = root.getBoundingClientRect();
           if (rect.width <= 0 || rect.height <= 0) return;
-          const viewX = Math.min(plot.width, Math.max(0, ((event.clientX - rect.left) / rect.width) * plot.width));
-          const matches = plot.series.map((series) => ({ series, point: nearestPoint(series.points, viewX) })).filter((item) => item.point);
+          const matches = plot.series
+            .map((series) => ({ series, point: nearestByKey(series.points, target, getKey) }))
+            .filter((item) => item.point);
           if (matches.length === 0) return;
-          const anchor = matches.reduce((best, item) => Math.abs(item.point.x - viewX) < Math.abs(best.point.x - viewX) ? item : best, matches[0]).point;
+          const anchor = matches.reduce((best, item) =>
+            Math.abs(getKey(item.point) - target) < Math.abs(getKey(best.point) - target) ? item : best,
+            matches[0]
+          ).point;
           line.setAttribute("x1", anchor.x.toFixed(1));
           line.setAttribute("x2", anchor.x.toFixed(1));
           line.setAttribute("y1", String(plot.padTop));
@@ -1470,6 +1478,33 @@
           tooltip.hidden = false;
           layer.setAttribute("opacity", "1");
         };
+        const hide = () => {
+          layer.setAttribute("opacity", "0");
+          tooltip.hidden = true;
+        };
+        if (group) group.add({ root, show: (ts) => renderAt(ts, getTs), hide });
+        let pendingEvent = null;
+        let rafId = null;
+        const handleMove = () => {
+          rafId = null;
+          const event = pendingEvent;
+          pendingEvent = null;
+          if (!event) return;
+          const rect = root.getBoundingClientRect();
+          if (rect.width <= 0 || rect.height <= 0) return;
+          const viewX = Math.min(plot.width, Math.max(0, ((event.clientX - rect.left) / rect.width) * plot.width));
+          if (group) {
+            let anchorTs = null;
+            for (const series of plot.series) {
+              const p = nearestByKey(series.points, viewX, getX);
+              if (p && p.ts != null) { anchorTs = p.ts; break; }
+            }
+            if (anchorTs == null) renderAt(viewX, getX);
+            else group.notify(anchorTs, root);
+          } else {
+            renderAt(viewX, getX);
+          }
+        };
         root.onpointermove = (event) => {
           pendingEvent = event;
           if (rafId == null) rafId = window.requestAnimationFrame(handleMove);
@@ -1477,8 +1512,8 @@
         root.onpointerleave = () => {
           if (rafId != null) { window.cancelAnimationFrame(rafId); rafId = null; }
           pendingEvent = null;
-          layer.setAttribute("opacity", "0");
-          tooltip.hidden = true;
+          if (group) group.clear();
+          else hide();
         };
       }
       function smoothPath(coords) {
@@ -1553,7 +1588,7 @@
           padTop,
           padBottom,
           series: [{ label: options.label || "", color, kind, points: coords }],
-        });
+        }, options.hoverGroup);
       }
       function drawMultiAreaChart(target, series, options = {}) {
         const root = typeof target === "string" ? document.getElementById(target) : target;
@@ -1602,7 +1637,7 @@
             ${hoverCircles}
           </g>
         </svg><div class="chart-tooltip" hidden></div>`;
-        installChartHover(root, { width, height, padTop, padBottom, series: hoverSeries });
+        installChartHover(root, { width, height, padTop, padBottom, series: hoverSeries }, options.hoverGroup);
       }
 
       function hashString(value) {
@@ -1618,13 +1653,14 @@
         const dlPts = chartPoints(chartHistory, "rx_bytes_per_sec");
         const upPts = chartPoints(chartHistory, "tx_bytes_per_sec");
         const rttPts = chartPoints(chartHistory, "latency_ms");
-        drawAreaChart("chart-cpu", cpuPts, "var(--chart-cpu)", { clipSpikes: chartState.clipSpikes.cpu, valueKind: "percent", minValue: 0, label: t("node.cpu_usage") });
-        drawAreaChart("chart-memory", memPts, "var(--chart-memory)", { clipSpikes: chartState.clipSpikes.memory, valueKind: "percent", minValue: 0, label: t("node.memory_usage") });
+        const hoverGroup = createHoverGroup();
+        drawAreaChart("chart-cpu", cpuPts, "var(--chart-cpu)", { clipSpikes: chartState.clipSpikes.cpu, valueKind: "percent", minValue: 0, label: t("node.cpu_usage"), hoverGroup });
+        drawAreaChart("chart-memory", memPts, "var(--chart-memory)", { clipSpikes: chartState.clipSpikes.memory, valueKind: "percent", minValue: 0, label: t("node.memory_usage"), hoverGroup });
         drawMultiAreaChart("chart-network", [
           { color: "var(--chart-network-down)", label: t("index.node.download"), points: dlPts },
           { color: "var(--chart-network-up)", label: t("index.node.upload"), points: upPts },
-        ], { clipSpikes: chartState.clipSpikes.network, valueKind: "rate", minValue: 0 });
-        drawAreaChart("chart-rtt", rttPts, "var(--chart-latency)", { clipSpikes: chartState.clipSpikes.latency, valueKind: "latency", minValue: 0, label: t("node.latency_history"), height: 70 });
+        ], { clipSpikes: chartState.clipSpikes.network, valueKind: "rate", minValue: 0, hoverGroup });
+        drawAreaChart("chart-rtt", rttPts, "var(--chart-latency)", { clipSpikes: chartState.clipSpikes.latency, valueKind: "latency", minValue: 0, label: t("node.latency_history"), height: 70, hoverGroup });
         if (document.getElementById("network-only-chart")) {
           drawMultiAreaChart("network-only-chart", [
             { color: "var(--chart-network-down)", label: t("index.node.download"), points: dlPts },
@@ -1644,13 +1680,14 @@
         const dlPts = chartPoints(chartHistory, "rx_bytes_per_sec");
         const upPts = chartPoints(chartHistory, "tx_bytes_per_sec");
         const rttPts = chartPoints(chartHistory, "latency_ms");
-        drawAreaChart("big-chart-cpu", cpuPts, "var(--chart-cpu)", { clipSpikes: chartState.clipSpikes.cpu, valueKind: "percent", minValue: 0, label: t("node.cpu_usage"), height: 220 });
-        drawAreaChart("big-chart-memory", memPts, "var(--chart-memory)", { clipSpikes: chartState.clipSpikes.memory, valueKind: "percent", minValue: 0, label: t("node.memory_usage"), height: 220 });
+        const hoverGroup = createHoverGroup();
+        drawAreaChart("big-chart-cpu", cpuPts, "var(--chart-cpu)", { clipSpikes: chartState.clipSpikes.cpu, valueKind: "percent", minValue: 0, label: t("node.cpu_usage"), height: 220, hoverGroup });
+        drawAreaChart("big-chart-memory", memPts, "var(--chart-memory)", { clipSpikes: chartState.clipSpikes.memory, valueKind: "percent", minValue: 0, label: t("node.memory_usage"), height: 220, hoverGroup });
         drawMultiAreaChart("big-chart-network", [
           { color: "var(--chart-network-down)", label: t("index.node.download"), points: dlPts },
           { color: "var(--chart-network-up)", label: t("index.node.upload"), points: upPts },
-        ], { clipSpikes: chartState.clipSpikes.network, valueKind: "rate", minValue: 0, height: 220 });
-        drawAreaChart("big-chart-latency", rttPts, "var(--chart-latency)", { clipSpikes: chartState.clipSpikes.latency, valueKind: "latency", minValue: 0, label: t("node.latency_history"), height: 220 });
+        ], { clipSpikes: chartState.clipSpikes.network, valueKind: "rate", minValue: 0, height: 220, hoverGroup });
+        drawAreaChart("big-chart-latency", rttPts, "var(--chart-latency)", { clipSpikes: chartState.clipSpikes.latency, valueKind: "latency", minValue: 0, label: t("node.latency_history"), height: 220, hoverGroup });
       }
 
       function renderTimeAxis(id, history, kind) {
