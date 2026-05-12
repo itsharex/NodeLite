@@ -18,6 +18,30 @@
           document.documentElement.setAttribute("data-theme", "dark");
         }
       })();
+
+      // 认证过期检查:如果距离上次成功加载超过 24 小时,清除浏览器的 Basic Auth
+      // 缓存并跳转到登出页面,强制用户重新登录。
+      (function () {
+        var AUTH_TIMESTAMP_KEY = "ximonitor.auth.timestamp";
+        var AUTH_EXPIRY_MS = 24 * 60 * 60 * 1000; // 24 小时
+        try {
+          var stored = window.localStorage.getItem(AUTH_TIMESTAMP_KEY);
+          var now = Date.now();
+          if (stored) {
+            var lastAuth = parseInt(stored, 10);
+            if (now - lastAuth > AUTH_EXPIRY_MS) {
+              // 超过 24 小时,清除时间戳并跳转到登出页面(触发 401 重新认证)
+              window.localStorage.removeItem(AUTH_TIMESTAMP_KEY);
+              window.location.href = "/logout-and-reauth";
+              return;
+            }
+          }
+          // 更新时间戳(每次页面加载都刷新,表示"最近一次活跃")
+          window.localStorage.setItem(AUTH_TIMESTAMP_KEY, now.toString());
+        } catch (_e) {
+          // localStorage 不可用时静默失败,不阻断页面加载
+        }
+      })();
     </script>
     <style>
       :root {

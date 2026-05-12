@@ -576,6 +576,7 @@ async fn run_server(config_path: &Path) -> Result<()> {
     let app = Router::new()
         .route("/healthz", get(healthz))
         .route("/readyz", get(readyz))
+        .route("/logout-and-reauth", get(logout_and_reauth))
         .route("/install/install-agent.sh", get(install_agent_script))
         .route("/install/bootstrap", get(install_bootstrap))
         .route("/ws", get(ws_handler))
@@ -763,6 +764,17 @@ async fn readyz(State(state): State<AppState>) -> StatusCode {
     } else {
         StatusCode::SERVICE_UNAVAILABLE
     }
+}
+
+/// 登出并强制重新认证:返回 401 + WWW-Authenticate 头,触发浏览器清除缓存的
+/// Basic Auth 凭据。前端在检测到认证过期(24 小时)时会跳转到此路由。
+async fn logout_and_reauth() -> Response {
+    (
+        StatusCode::UNAUTHORIZED,
+        [(header::WWW_AUTHENTICATE, "Basic realm=\"XiMonitor\"")],
+        "Session expired. Please log in again.",
+    )
+        .into_response()
 }
 
 /// 中间件:对受保护路由强制基本认证;放行时把 Request 继续交给下一个处理器。
