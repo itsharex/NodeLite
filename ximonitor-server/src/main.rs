@@ -33,7 +33,7 @@ use axum::extract::{Path as AxumPath, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::middleware::{Next, from_fn_with_state};
 use axum::response::{Html, IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use base64::Engine;
 use chrono::{TimeZone, Utc};
@@ -43,6 +43,7 @@ use serde::{Deserialize, Serialize};
 use tokio::fs;
 use tokio::net::TcpListener;
 use tokio::time::{MissedTickBehavior, interval};
+use totp_lite::{totp_custom, Sha1};
 use tower_http::trace::TraceLayer;
 use tracing::{error, info, warn};
 use url::Url;
@@ -107,6 +108,7 @@ struct AppState {
     registry: NodeRegistry,
     shared: SharedState,
     ws_admission: WsAdmissionController,
+    readonly_auth: ReadonlyRouteAuth,
 }
 
 /// 只跟踪"对外是否可服务"所需的几个关键依赖状态。
@@ -132,6 +134,18 @@ struct ReadonlyRouteAuth {
 struct TwoFactorSession {
     username: String,
     authenticated_at: i64, // Unix timestamp
+}
+
+/// 2FA 验证请求。
+#[derive(Debug, Deserialize)]
+struct Verify2FARequest {
+    code: String,
+}
+
+/// 2FA 验证失败响应。
+#[derive(Debug, Serialize)]
+struct Verify2FAError {
+    error: String,
 }
 
 /// `/api/bootstrap` 的响应结构,只读、用于前端启动期获取基本元数据。
@@ -588,6 +602,7 @@ async fn run_server(config_path: &Path) -> Result<()> {
         registry,
         shared,
         ws_admission: WsAdmissionController::new(&config.ws),
+        readonly_auth: readonly_route_auth.clone(),
     };
     let shared_for_shutdown = state.shared.clone();
     let snapshot_path = config.snapshot_path.clone();
@@ -601,13 +616,15 @@ async fn run_server(config_path: &Path) -> Result<()> {
         .route("/api/nodes/{node_id}", get(node_status))
         .route("/api/nodes/{node_id}/history", get(node_history))
         .route_layer(from_fn_with_state(
-            readonly_route_auth,
+            state.clone(),
             require_readonly_auth,
         ));
     let app = Router::new()
         .route("/healthz", get(healthz))
         .route("/readyz", get(readyz))
         .route("/logout-and-reauth", get(logout_and_reauth))
+        .route("/verify-2fa", get(verify_2fa_page))
+        .route("/api/verify-2fa", post(verify_2fa_api))
         .route("/install/install-agent.sh", get(install_agent_script))
         .route("/install/bootstrap", get(install_bootstrap))
         .route("/ws", get(ws_handler))
@@ -815,6 +832,98 @@ async fn ui_i18n_asset() -> Response {
         .into_response()
 }
 
+/// 2FA 验证页面。
+async fn verify_2fa_page() -> Html<&'static str> {
+    Html(include_str!("../assets/verify-2fa.html"))
+}
+
+/// 2FA 验证 API:验证 TOTP 码,成功后设置完整认证 cookie。
+async fn verify_2fa_api(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<Verify2FARequest>,
+) -> Result<impl IntoResponse, (StatusCode, Json<Verify2FAError>)> {
+    // 检查是否有待验证的 2FA session cookie
+    let cookie_header = headers
+        .get(header::COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    let pending_session = cookie_header
+        .split(';')
+        .find_map(|cookie| {
+            let cookie = cookie.trim();
+            cookie.strip_prefix("ximonitor_2fa_pending=")
+        });
+
+    let Some(session_json) = pending_session else {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(Verify2FAError {
+                error: "No pending 2FA session".to_string(),
+            }),
+        ));
+    };
+
+    let _session: TwoFactorSession = serde_json::from_str(session_json).map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(Verify2FAError {
+                error: "Invalid session".to_string(),
+            }),
+        )
+    })?;
+
+    // 验证 TOTP 码
+    if !verify_totp(&state, &request.code) {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(Verify2FAError {
+                error: "Invalid code".to_string(),
+            }),
+        ));
+    }
+
+    // 验证成功:设置完整认证 cookie
+    Ok((
+        StatusCode::OK,
+        [
+            (header::SET_COOKIE, "ximonitor_auth=verified; Path=/; HttpOnly; Max-Age=86400"),
+            (header::SET_COOKIE, "ximonitor_2fa_pending=; Path=/; Max-Age=0"),
+        ],
+    ))
+}
+
+/// 验证 TOTP 码是否正确。
+fn verify_totp(state: &AppState, code: &str) -> bool {
+    let Some(ref secret) = state.readonly_auth.totp_secret else {
+        return false;
+    };
+
+    // 验证码必须是 6 位数字
+    if code.len() != 6 || !code.chars().all(|c| c.is_ascii_digit()) {
+        return false;
+    }
+
+    // 获取当前时间戳 (30 秒为一个周期)
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+
+    // 验证当前时间窗口及前后各一个窗口 (允许 ±30 秒时钟偏差)
+    for time_offset in [-1, 0, 1] {
+        let time_step = (now as i64 + time_offset * 30) as u64 / 30;
+        let expected = totp_custom::<Sha1>(30, 6, secret, time_step);
+        let expected_str = format!("{:06}", expected);
+        if expected_str == code {
+            return true;
+        }
+    }
+
+    false
+}
+
 /// 健康检查接口,始终返回 200。
 async fn healthz() -> StatusCode {
     StatusCode::OK
@@ -842,14 +951,62 @@ async fn logout_and_reauth() -> Response {
 
 /// 中间件:对受保护路由强制基本认证;放行时把 Request 继续交给下一个处理器。
 async fn require_readonly_auth(
-    State(auth): State<ReadonlyRouteAuth>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
     request: Request,
     next: Next,
 ) -> Response {
-    if auth.is_authorized(&request) {
+    let auth = &state.readonly_auth;
+
+    // 如果未启用认证,直接放行
+    if auth.expected_authorization.is_none() {
         return next.run(request).await;
     }
 
+    // 如果启用了 2FA,先检查是否有完整认证 cookie
+    if auth.enable_2fa {
+        let cookie_header = headers
+            .get(header::COOKIE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+
+        let has_auth_cookie = cookie_header
+            .split(';')
+            .any(|cookie| cookie.trim() == "ximonitor_auth=verified");
+
+        if has_auth_cookie {
+            // 已完成 2FA 验证
+            return next.run(request).await;
+        }
+
+        // 检查 Basic Auth
+        if auth.is_authorized(&request) {
+            // Basic Auth 通过,但需要 2FA 验证
+            // 设置 pending cookie 并重定向到 2FA 页面
+            let session = TwoFactorSession {
+                username: "admin".to_string(),
+                authenticated_at: Utc::now().timestamp(),
+            };
+            let session_json = serde_json::to_string(&session).unwrap();
+            let pending_cookie = format!(
+                "ximonitor_2fa_pending={}; Path=/; HttpOnly; Max-Age=300",
+                session_json
+            );
+
+            return (
+                StatusCode::FOUND,
+                [(header::SET_COOKIE, pending_cookie.as_str()), (header::LOCATION, "/verify-2fa")],
+            )
+                .into_response();
+        }
+    } else {
+        // 未启用 2FA,只检查 Basic Auth
+        if auth.is_authorized(&request) {
+            return next.run(request).await;
+        }
+    }
+
+    // 认证失败
     (
         StatusCode::UNAUTHORIZED,
         [(header::WWW_AUTHENTICATE, "Basic realm=\"XiMonitor\"")],
@@ -2006,6 +2163,7 @@ mod tests {
                 auth_fail_max_attempts: 6,
                 auth_block_secs: 600,
             }),
+            readonly_auth: ReadonlyRouteAuth::from_config(None),
         };
 
         let _app: Router = Router::new()
@@ -2031,6 +2189,8 @@ mod tests {
         let auth = ReadonlyRouteAuth::from_config(Some(ximonitor_proto::ReadonlyAuthConfig {
             username: "viewer".to_string(),
             password: "secret".to_string(),
+            enable_2fa: false,
+            totp_secret: None,
         }));
         let request = Request::builder()
             .uri("/api/overview")
@@ -2163,6 +2323,7 @@ mod tests {
                     auth_fail_max_attempts: 6,
                     auth_block_secs: 600,
                 }),
+                readonly_auth: ReadonlyRouteAuth::from_config(None),
             };
             let request = Request::builder()
                 .uri("/install/bootstrap")
