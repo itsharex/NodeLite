@@ -1854,6 +1854,7 @@ dependencies = [
  "chrono",
  "clap",
  "futures",
+ "getrandom 0.3.4",
  "libc",
  "rustls",
  "serde_json",

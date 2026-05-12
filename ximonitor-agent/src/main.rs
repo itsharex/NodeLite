@@ -18,6 +18,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, anyhow};
 use clap::Parser;
 use futures::{SinkExt, StreamExt};
+use getrandom::fill as fill_random;
 use tokio::fs;
 use tokio::time::{MissedTickBehavior, interval, sleep, timeout};
 use tokio_tungstenite::connect_async_with_config;
@@ -367,9 +368,17 @@ fn log_notice(level: NoticeLevel, message: &str) {
     }
 }
 
-/// 指数退避表:前几次快速重试,后续上限为 60 秒。
+/// 指数退避表附 ±50 % 抖动:同一时刻批量失败的 Agent 不会"同步雪崩"。
+///
+/// 基础时长仍走 1/2/4/8/16/32/60 s 的指数序列,但每次返回值落在
+/// `[base * 0.5, base * 1.5)` 内,使若干个 Agent 在同一服务端重启窗口里
+/// 的下一次连接均匀地分散开;避免恢复瞬间被反代 `limit_conn` 拒绝 + 重试,
+/// 反过来再放大震荡。
+///
+/// 当 getrandom 失败(极少见,例如刚启动时内核熵不足),退化到基础时长本身,
+/// 这与未加 jitter 之前的行为等价,功能仍可用。
 fn reconnect_delay(attempt: u32) -> Duration {
-    let seconds = match attempt {
+    let base_secs: u64 = match attempt {
         0 => 1,
         1 => 2,
         2 => 4,
@@ -378,7 +387,17 @@ fn reconnect_delay(attempt: u32) -> Duration {
         5 => 32,
         _ => 60,
     };
-    Duration::from_secs(seconds)
+    let base_ms = base_secs.saturating_mul(1000);
+    let half = base_ms / 2;
+    let jitter_ms = sample_random_u64().map(|value| value % base_ms).unwrap_or(0);
+    Duration::from_millis(half.saturating_add(jitter_ms))
+}
+
+/// 抽取 8 字节系统随机数;失败时返回 `None`,调用方需要给出合理的回退。
+fn sample_random_u64() -> Option<u64> {
+    let mut buf = [0_u8; 8];
+    fill_random(&mut buf).ok()?;
+    Some(u64::from_le_bytes(buf))
 }
 
 /// 若 Agent 配置了未启用 TLS 的远程服务器,则周期性输出警告日志。
@@ -429,7 +448,10 @@ fn host_is_local(host: Option<&str>) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::uses_insecure_remote_transport;
+    use std::collections::HashSet;
+    use std::time::Duration;
+
+    use super::{reconnect_delay, uses_insecure_remote_transport};
 
     #[test]
     fn warns_for_remote_ws_transport() {
@@ -446,5 +468,40 @@ mod tests {
         ));
         assert!(!uses_insecure_remote_transport("ws://127.0.0.1:8080/ws"));
         assert!(!uses_insecure_remote_transport("ws://localhost:8080/ws"));
+    }
+
+    #[test]
+    fn reconnect_delay_is_within_jitter_window_and_disperses() {
+        // 每次重连退避必须落在 [base * 0.5, base * 1.5) 内;
+        // 同时,N 次取样必须出现 >1 个不同结果,证明 jitter 真的在生效
+        // 而不是退化为常量。
+        let cases: &[(u32, u64)] = &[
+            (0, 1),
+            (1, 2),
+            (2, 4),
+            (3, 8),
+            (4, 16),
+            (5, 32),
+            (6, 60),
+            (1024, 60),
+        ];
+        for &(attempt, base_secs) in cases {
+            let base_ms = base_secs * 1000;
+            let lower = Duration::from_millis(base_ms / 2);
+            let upper = Duration::from_millis(base_ms / 2 + base_ms);
+            let mut samples: HashSet<u128> = HashSet::new();
+            for _ in 0..32 {
+                let delay = reconnect_delay(attempt);
+                assert!(
+                    delay >= lower && delay < upper,
+                    "attempt {attempt}: {delay:?} not in [{lower:?}, {upper:?})",
+                );
+                samples.insert(delay.as_millis());
+            }
+            assert!(
+                samples.len() > 1,
+                "attempt {attempt}: 32 samples all identical, jitter not active",
+            );
+        }
     }
 }
