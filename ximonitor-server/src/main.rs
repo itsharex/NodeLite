@@ -44,14 +44,14 @@ use serde::{Deserialize, Serialize};
 use tokio::fs;
 use tokio::net::TcpListener;
 use tokio::time::{MissedTickBehavior, interval};
-use totp_lite::{totp_custom, Sha1};
+use totp_lite::{Sha1, totp_custom};
 use tower_http::trace::TraceLayer;
 use tracing::{error, info, warn};
 use url::Url;
 use ximonitor_proto::{
     DiskUsage, HelloMessage, LoadAverage, MemoryUsage, MetricsMessage, NetworkCounters,
-    NodeSnapshot, PingMessage, PongMessage, ReadonlyAuthConfig, ServerConfig,
-    ServerNoticeMessage, WireMessage, WsConfig, parse_server_config, percentage,
+    NodeSnapshot, PingMessage, PongMessage, ReadonlyAuthConfig, ServerConfig, ServerNoticeMessage,
+    WireMessage, WsConfig, parse_server_config, percentage,
 };
 
 use crate::history::HistoryStore;
@@ -384,10 +384,7 @@ impl ReadonlyRouteAuth {
                 let auth = format!("Basic {encoded}");
 
                 let totp_secret = if config.enable_2fa {
-                    config
-                        .totp_secret
-                        .as_deref()
-                        .and_then(decode_totp_secret)
+                    config.totp_secret.as_deref().and_then(decode_totp_secret)
                 } else {
                     None
                 };
@@ -468,7 +465,9 @@ impl TwoFactorSessions {
 
 fn prune_expired_sessions(store: &mut TwoFactorSessionStore, now: Instant) {
     store.pending.retain(|_, expires_at| *expires_at > now);
-    store.authenticated.retain(|_, expires_at| *expires_at > now);
+    store
+        .authenticated
+        .retain(|_, expires_at| *expires_at > now);
 }
 
 fn lock_mutex<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -717,10 +716,7 @@ async fn run_server(config_path: &Path) -> Result<()> {
         .route("/api/nodes", get(nodes))
         .route("/api/nodes/{node_id}", get(node_status))
         .route("/api/nodes/{node_id}/history", get(node_history))
-        .route_layer(from_fn_with_state(
-            state.clone(),
-            require_readonly_auth,
-        ));
+        .route_layer(from_fn_with_state(state.clone(), require_readonly_auth));
     let app = Router::new()
         .route("/healthz", get(healthz))
         .route("/readyz", get(readyz))
@@ -973,14 +969,17 @@ async fn verify_2fa_api(
         ));
     }
 
-    let auth_token = state.two_factor_sessions.create_authenticated().map_err(|_| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(Verify2FAError {
-                error: "Failed to create authenticated session".to_string(),
-            }),
-        )
-    })?;
+    let auth_token = state
+        .two_factor_sessions
+        .create_authenticated()
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(Verify2FAError {
+                    error: "Failed to create authenticated session".to_string(),
+                }),
+            )
+        })?;
     state.two_factor_sessions.consume_pending(&pending_token);
     let secure = secure_cookies(&state);
 
@@ -988,7 +987,12 @@ async fn verify_2fa_api(
     Ok((
         StatusCode::OK,
         AppendHeaders([
-            auth_cookie(TWO_FACTOR_AUTH_COOKIE, &auth_token, TWO_FACTOR_AUTH_SECS, secure),
+            auth_cookie(
+                TWO_FACTOR_AUTH_COOKIE,
+                &auth_token,
+                TWO_FACTOR_AUTH_SECS,
+                secure,
+            ),
             expire_cookie(TWO_FACTOR_PENDING_COOKIE, secure),
         ]),
     ))
@@ -1063,7 +1067,11 @@ fn expire_cookie(name: &'static str, secure: bool) -> (header::HeaderName, Strin
 }
 
 fn secure_cookies(state: &AppState) -> bool {
-    state.shared.config().public_base_url.starts_with("https://")
+    state
+        .shared
+        .config()
+        .public_base_url
+        .starts_with("https://")
 }
 
 /// 健康检查接口,始终返回 200。
@@ -1682,10 +1690,11 @@ async fn maybe_refresh_agent_token(
         expires_at = %expires_at.to_rfc3339(),
         "refreshed agent token before expiry",
     );
-    let response = WireMessage::RefreshTokenResponse(ximonitor_proto::RefreshTokenResponseMessage {
-        new_token,
-        expires_at: expires_at.to_rfc3339(),
-    });
+    let response =
+        WireMessage::RefreshTokenResponse(ximonitor_proto::RefreshTokenResponseMessage {
+            new_token,
+            expires_at: expires_at.to_rfc3339(),
+        });
     let payload = serde_json::to_string(&response)
         .map_err(|error| anyhow!("failed to serialize token refresh response: {error}"))?;
     Ok(Some(payload))

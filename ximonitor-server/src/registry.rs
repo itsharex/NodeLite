@@ -247,7 +247,8 @@ pub async fn issue_node(path: &Path, request: IssueNodeRequest) -> Result<IssueN
             }
             if request.rotate_token {
                 file.nodes[index].token = generate_token()?;
-                file.nodes[index].token_expires_at = Some(now + ChronoDuration::days(DEFAULT_TOKEN_VALIDITY_DAYS));
+                file.nodes[index].token_expires_at =
+                    Some(now + ChronoDuration::days(DEFAULT_TOKEN_VALIDITY_DAYS));
                 rotated_token = true;
             }
 
