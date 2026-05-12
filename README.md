@@ -25,6 +25,8 @@ XiMonitor 是一个用 Rust 编写的轻量级服务器监控面板，包含：
   - `ping`
   - `pong`
   - `server_notice`
+  - `refresh_token_request`
+  - `refresh_token_response`
 - 14 天 SQLite 历史保留
 - 快照落盘与进程重启后恢复最近状态
 - agent 指数退避自动重连
@@ -127,6 +129,9 @@ snapshot_path = "/opt/ximonitor/data/snapshot.json"
 [auth]
 username = "viewer"
 password = "change-this-password"
+# 默认关闭;开启后必须配置 totp_secret。
+enable_2fa = false
+# totp_secret = "JBSWY3DPEHPK3PXP"
 
 [ws]
 max_total_connections = 1024
@@ -142,6 +147,61 @@ auth_block_secs = 900
 sudo systemctl status ximonitor-server.service
 sudo journalctl -u ximonitor-server.service -f
 ```
+
+## 认证与安全
+
+XiMonitor 的默认安全模型是：Web 面板只读但必须鉴权，Agent 使用逐节点 token 接入，配置只能通过服务端文件与 CLI 修改。
+
+### Web 面板认证
+
+- `/`、`/nodes/*`、`/api/*` 受只读 Basic Auth 保护。
+- 如果 `server.listen` 不是回环地址，配置文件必须提供 `[auth] username/password`，否则服务端会拒绝启动。
+- `READONLY_PASSWORD` 或配置文件里的 `auth.password` 至少需要 8 个字符；如果没有同时包含字母和数字，服务端会在启动日志中给出弱密码警告。
+- 前端会记录本浏览器的登录时间，超过 24 小时后跳转到 `/logout-and-reauth`，触发浏览器重新认证。
+
+### 可选 TOTP 2FA
+
+TOTP 默认关闭。要开启二次验证，在 `server.toml` 里写：
+
+```toml
+[auth]
+username = "viewer"
+password = "a-strong-password-123"
+enable_2fa = true
+totp_secret = "JBSWY3DPEHPK3PXP"
+```
+
+生成一个新的 base32 secret：
+
+```bash
+python3 - <<'PY'
+import base64, secrets
+print(base64.b32encode(secrets.token_bytes(20)).decode().rstrip("="))
+PY
+```
+
+把 secret 加进认证器 App 时，可以手工录入，也可以按下面格式生成二维码：
+
+```text
+otpauth://totp/XiMonitor:viewer?secret=<totp_secret>&issuer=XiMonitor
+```
+
+2FA 行为说明：
+
+- 登录流程是 `Basic Auth -> /verify-2fa 输入 6 位 TOTP -> 进入面板`。
+- TOTP 校验允许前后各一个 30 秒窗口的时钟偏差。
+- Basic Auth 通过后的 TOTP 等待窗口是 5 分钟。
+- 2FA 通过后的会话有效期是 24 小时，cookie 为 `HttpOnly`、`SameSite=Strict`；如果 `public_base_url` 是 `https://`，还会自动带 `Secure`。
+- 2FA 默认关闭，旧配置不需要修改即可继续运行。
+
+### Agent Token 生命周期
+
+- 每个节点都有独立 token，存放在服务端 `server.json` 中。
+- 新签发或轮换的 node token 默认 90 天有效。
+- 服务端在 WebSocket `hello` 阶段检查 token 是否过期，过期会拒绝接入并记录错误。
+- 已认证的长连接会在 token 距离过期不足 7 天时自动刷新；服务端下发新 token，Agent 会更新内存中的 token，并原子写回 `agent.toml`。
+- 旧版 `server.json` 中没有过期时间的 token 会在节点下一次在线会话里被自动刷新成 90 天 token。
+- 如果某台 Agent 离线超过 token 有效期，它无法再用旧 token 自动刷新，需要在服务端重新执行 `install-agent --rotate-token` 或重新安装该节点。
 
 ## Nginx 反代示例
 

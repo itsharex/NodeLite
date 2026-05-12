@@ -26,6 +26,10 @@ max_message_bytes = 65536
 username = "viewer"
 # 对应密码,生产环境务必修改,不要沿用默认值。
 password = "change-this-password"
+# 可选:开启 TOTP 二次验证。开启后需要先通过 Basic Auth,再输入 6 位动态码。
+enable_2fa = false
+# 可选:TOTP base32 secret。仅在 enable_2fa = true 时必须配置。
+# totp_secret = "JBSWY3DPEHPK3PXP"
 
 [ws]
 # 全局并发 WebSocket 连接上限。
