@@ -514,7 +514,14 @@ fn temporary_registry_path(path: &Path) -> PathBuf {
         .file_name()
         .and_then(|value| value.to_str())
         .unwrap_or("server.json");
-    path.with_file_name(format!("{file_name}.tmp"))
+    // 并发写时固定 tmp 名会互相覆盖;加随机后缀让每个写操作拿到独立临时文件。
+    let mut suffix = [0u8; 8];
+    getrandom::fill(&mut suffix).expect("getrandom should succeed");
+    let suffix_hex = suffix
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    path.with_file_name(format!("{file_name}.tmp.{suffix_hex}"))
 }
 
 fn write_registry_payload(path: &Path, payload: &str) -> Result<()> {
@@ -1183,5 +1190,58 @@ mod tests {
             release_url,
             "https://github.com/XiNian-dada/XiMonitor/releases/latest/download"
         );
+    }
+
+    #[tokio::test]
+    async fn concurrent_issue_node_preserves_all_nodes() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let temp_dir = std::env::temp_dir()
+            .join(format!("ximonitor-registry-concurrent-test-{unique}"));
+        std::fs::create_dir_all(&temp_dir).expect("temp dir");
+        let path = temp_dir.join("server.json");
+
+        // 并发 issue 10 个不同节点,验证 flock + 唯一 tmp 文件名能保证全部落盘。
+        let mut handles = Vec::new();
+        for i in 0..10 {
+            let path = path.clone();
+            let handle = tokio::spawn(async move {
+                issue_node(
+                    &path,
+                    IssueNodeRequest {
+                        node_id: format!("node-{i:02}"),
+                        node_label: Some(format!("Node {i:02}")),
+                        tags: Vec::new(),
+                        rotate_token: false,
+                    },
+                )
+                .await
+                .expect("issue should succeed")
+            });
+            handles.push(handle);
+        }
+
+        let results = futures::future::join_all(handles).await;
+        assert_eq!(results.len(), 10, "all tasks should complete");
+
+        let registry = NodeRegistry::load(&path).await.expect("load");
+        let node_ids: Vec<_> = registry
+            .state
+            .read()
+            .await
+            .entries
+            .keys()
+            .cloned()
+            .collect();
+        assert_eq!(
+            node_ids.len(),
+            10,
+            "all 10 nodes should be present in registry"
+        );
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&temp_dir);
     }
 }
