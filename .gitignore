@@ -4,6 +4,6 @@
 /.DS_Store
 /data
 /dist
+/docs
 
-docs/security-stability-maintainability-review.md
 .claude/AGENTS.md
