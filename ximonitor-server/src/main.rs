@@ -214,8 +214,13 @@ const MAX_SANITIZED_STRING_BYTES: usize = 256;
 const MAX_SANITIZED_RATE_BYTES_PER_SEC: f64 = 1_000_000_000_000.0;
 /// 负载平均数的合法上限。
 const MAX_SANITIZED_LOAD: f64 = 1_000_000.0;
-/// 单个 WebSocket 会话中允许出现的异常 metrics 报告次数,超过即主动断开。
-const METRIC_ANOMALY_SESSION_LIMIT: u32 = 5;
+/// 一个 WebSocket 会话在 `METRIC_ANOMALY_WINDOW_SECS` 窗口内允许出现的异常
+/// metrics 报告次数,超过即主动断开。
+/// 滑动窗口的设计避免了"长会话偶发异常累积"造成的误判:任何 anomaly 在窗口
+/// 过去之后都会被忽略,只有真正持续上报异常的 Agent 才会触发断连。
+const METRIC_ANOMALY_SESSION_LIMIT: usize = 5;
+/// 计算 anomaly 触发阈值时使用的滑动窗口(秒),默认 5 分钟。
+const METRIC_ANOMALY_WINDOW_SECS: u64 = 300;
 /// 历史接口默认查询窗口(小时)。
 const DEFAULT_HISTORY_WINDOW_HOURS: u64 = 24;
 /// 历史接口默认返回的样本点数。
@@ -959,7 +964,7 @@ async fn handle_socket(
         ping_ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
         let mut outstanding_pings: HashMap<u64, Instant> = HashMap::new();
         let mut next_ping_nonce = 1_u64;
-        let mut metric_anomaly_count = 0_u32;
+        let mut metric_anomaly_window: VecDeque<Instant> = VecDeque::new();
 
         loop {
             tokio::select! {
@@ -980,20 +985,24 @@ async fn handle_socket(
                                 }
                                 let (snapshot, report) = sanitize_snapshot(shared.config(), snapshot);
                                 if report.modified() {
-                                    metric_anomaly_count =
-                                        next_metric_anomaly_count(metric_anomaly_count, &report);
+                                    update_metric_anomaly_window(
+                                        &mut metric_anomaly_window,
+                                        &report,
+                                        Instant::now(),
+                                    );
                                     warn!(
                                         node_id = %node_id,
                                         session_id,
                                         anomalies = report.total(),
-                                        anomaly_count = metric_anomaly_count,
+                                        anomaly_window_size = metric_anomaly_window.len(),
                                         "agent reported out-of-range metrics; clamped before persistence",
                                     );
-                                    if should_disconnect_for_metric_anomalies(metric_anomaly_count) {
+                                    if should_disconnect_for_metric_anomalies(&metric_anomaly_window) {
                                         warn!(
                                             node_id = %node_id,
                                             session_id,
                                             limit = METRIC_ANOMALY_SESSION_LIMIT,
+                                            window_secs = METRIC_ANOMALY_WINDOW_SECS,
                                             "disconnecting session after repeated metric anomalies",
                                         );
                                         break Ok(());
@@ -1422,16 +1431,30 @@ impl SanitizationReport {
     }
 }
 
-fn next_metric_anomaly_count(current_count: u32, report: &SanitizationReport) -> u32 {
+/// 把"本次清洗是否触发了 anomaly"折算到滑动窗口里。
+///
+/// `window` 中保留的是最近若干次 anomaly 的发生时刻;早于
+/// `now - METRIC_ANOMALY_WINDOW_SECS` 的条目在此被剔除,确保长会话里
+/// 偶发的 sanitize 修正不会无限累积成"会话级"误判。
+fn update_metric_anomaly_window(
+    window: &mut VecDeque<Instant>,
+    report: &SanitizationReport,
+    now: Instant,
+) {
+    let horizon = Duration::from_secs(METRIC_ANOMALY_WINDOW_SECS);
+    while window
+        .front()
+        .is_some_and(|recorded_at| now.duration_since(*recorded_at) > horizon)
+    {
+        window.pop_front();
+    }
     if report.modified() {
-        current_count.saturating_add(1)
-    } else {
-        current_count
+        window.push_back(now);
     }
 }
 
-fn should_disconnect_for_metric_anomalies(metric_anomaly_count: u32) -> bool {
-    metric_anomaly_count >= METRIC_ANOMALY_SESSION_LIMIT
+fn should_disconnect_for_metric_anomalies(window: &VecDeque<Instant>) -> bool {
+    window.len() >= METRIC_ANOMALY_SESSION_LIMIT
 }
 
 fn sanitize_percentage(value: f64, counter: &mut u32) -> f64 {
@@ -1659,10 +1682,11 @@ mod tests {
         AppState, MAX_SANITIZED_DISKS, MAX_SANITIZED_LOAD, MAX_SANITIZED_RATE_BYTES_PER_SEC,
         MAX_SANITIZED_STRING_BYTES, METRIC_ANOMALY_SESSION_LIMIT, ReadonlyRouteAuth,
         SanitizationReport, ServerReadiness, WsAdmissionController, WsAdmissionError, bootstrap,
-        healthz, index, install_agent_script, install_bootstrap, next_metric_anomaly_count,
-        node_detail, node_history, node_status, nodes, overview, readyz, resolve_client_ip,
-        sanitize_snapshot, should_disconnect_for_metric_anomalies, sweep_expired_auth_failures,
-        truncate_to_byte_boundary, ui_i18n_asset, uses_insecure_remote_public_base_url, ws_handler,
+        healthz, index, install_agent_script, install_bootstrap, node_detail, node_history,
+        node_status, nodes, overview, readyz, resolve_client_ip, sanitize_snapshot,
+        should_disconnect_for_metric_anomalies, sweep_expired_auth_failures,
+        truncate_to_byte_boundary, ui_i18n_asset, update_metric_anomaly_window,
+        uses_insecure_remote_public_base_url, ws_handler,
     };
     use crate::history::HistoryStore;
     use crate::registry::{IssueNodeRequest, NodeRegistry, issue_node};
@@ -2138,12 +2162,23 @@ mod tests {
         assert_eq!(report.dropped_disks, 3);
         assert!(report.modified());
 
+        // clean 报告不应推动 anomaly 窗口前进;modified 报告才入窗口。
+        let mut window: std::collections::VecDeque<std::time::Instant> =
+            std::collections::VecDeque::new();
+        let now = std::time::Instant::now();
         let clean_report = SanitizationReport::default();
-        assert_eq!(next_metric_anomaly_count(2, &clean_report), 2);
-        assert!(!should_disconnect_for_metric_anomalies(4));
-        assert!(should_disconnect_for_metric_anomalies(
-            METRIC_ANOMALY_SESSION_LIMIT
-        ));
+        update_metric_anomaly_window(&mut window, &clean_report, now);
+        assert!(window.is_empty());
+
+        // 在窗口内攒满 METRIC_ANOMALY_SESSION_LIMIT 条 → 触发断连。
+        for tick in 0..METRIC_ANOMALY_SESSION_LIMIT {
+            update_metric_anomaly_window(
+                &mut window,
+                &report,
+                now + std::time::Duration::from_secs(tick as u64),
+            );
+        }
+        assert!(should_disconnect_for_metric_anomalies(&window));
     }
 
     #[test]
@@ -2323,6 +2358,49 @@ mod tests {
             }
             _ => panic!("client should be temporarily blocked"),
         }
+    }
+
+    #[test]
+    fn metric_anomaly_window_decays_so_long_sessions_avoid_false_positive_kicks() {
+        // 旧实现:METRIC_ANOMALY_SESSION_LIMIT 是会话生命周期内的累计上限,
+        // 因此长跑节点偶发 5 次异常就会被踢。
+        // 新实现:计数滑动到 METRIC_ANOMALY_WINDOW_SECS 之外即衰减,只有
+        // "在同一窗口内连续超阈值"才触发断连。
+        use std::collections::VecDeque;
+        use std::time::{Duration, Instant};
+
+        let mut window: VecDeque<Instant> = VecDeque::new();
+        let report = SanitizationReport {
+            clamped_percents: 1,
+            ..SanitizationReport::default()
+        };
+
+        // 模拟一个 24 小时的长会话,每隔 1 小时遇到一次偶发的 sanitize 修正。
+        // 任何两次 anomaly 的间隔(3600 s)都远大于窗口长度(默认 300 s),
+        // 因此每次入队前老条目都已被剔除,窗口始终最多只有 1 条。
+        let started_at = Instant::now();
+        for hour in 0..24 {
+            let now = started_at + Duration::from_secs(hour * 3600);
+            update_metric_anomaly_window(&mut window, &report, now);
+            assert!(
+                !should_disconnect_for_metric_anomalies(&window),
+                "long session with sparse anomalies should never be kicked",
+            );
+        }
+
+        // 反过来,同一窗口内的高频异常 → 窗口内累计达到阈值 → 触发断连。
+        let burst_at = started_at + Duration::from_secs(48 * 3600);
+        for tick in 0..METRIC_ANOMALY_SESSION_LIMIT {
+            update_metric_anomaly_window(
+                &mut window,
+                &report,
+                burst_at + Duration::from_secs(tick as u64),
+            );
+        }
+        assert!(
+            should_disconnect_for_metric_anomalies(&window),
+            "burst within the window must still trigger the kick",
+        );
     }
 
     #[test]
