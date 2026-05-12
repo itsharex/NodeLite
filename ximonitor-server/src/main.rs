@@ -926,7 +926,10 @@ fn install_blocked_response(retry_after_secs: u64) -> Response {
 /// 固定为 32 字节随机数的 lowercase hex —— 即 64 字符 0-9a-f。这里的格式检查
 /// 让显然不合法的输入在落到文件锁前就被拒掉。
 fn is_well_formed_install_token(token: &str) -> bool {
-    token.len() == 64 && token.bytes().all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+    token.len() == 64
+        && token
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 /// 仪表盘顶部的总览数据。
@@ -2052,8 +2055,7 @@ mod tests {
                 )
                 .body(Body::empty())
                 .expect("request should build");
-            let peer_addr =
-                SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 51234));
+            let peer_addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 51234));
             let bootstrap_response = install_bootstrap(
                 State(state),
                 ConnectInfo(peer_addr),
@@ -2630,12 +2632,11 @@ mod tests {
 
     #[test]
     fn install_admission_blocks_after_repeated_failures() {
-        let controller =
-            InstallAdmissionController::new(InstallAdmissionConfig {
-                auth_fail_window_secs: 60,
-                auth_fail_max_attempts: 2,
-                auth_block_secs: 300,
-            });
+        let controller = InstallAdmissionController::new(InstallAdmissionConfig {
+            auth_fail_window_secs: 60,
+            auth_fail_max_attempts: 2,
+            auth_block_secs: 300,
+        });
         let client_ip: IpAddr = "198.51.100.24".parse().expect("ip");
 
         // 阈值前应放行

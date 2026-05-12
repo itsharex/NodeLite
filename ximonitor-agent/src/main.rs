@@ -389,7 +389,9 @@ fn reconnect_delay(attempt: u32) -> Duration {
     };
     let base_ms = base_secs.saturating_mul(1000);
     let half = base_ms / 2;
-    let jitter_ms = sample_random_u64().map(|value| value % base_ms).unwrap_or(0);
+    let jitter_ms = sample_random_u64()
+        .map(|value| value % base_ms)
+        .unwrap_or(0);
     Duration::from_millis(half.saturating_add(jitter_ms))
 }
 
