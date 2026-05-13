@@ -157,7 +157,7 @@ XiMonitor 的默认安全模型是：Web 面板只读但必须鉴权，Agent 使
 - `/`、`/nodes/*`、`/api/*` 受只读 Basic Auth 保护。
 - 如果 `server.listen` 不是回环地址，配置文件必须提供 `[auth] username/password`，否则服务端会拒绝启动。
 - `READONLY_PASSWORD` 或配置文件里的 `auth.password` 至少需要 8 个字符；如果没有同时包含字母和数字，服务端会在启动日志中给出弱密码警告。
-- 前端会记录本浏览器的登录时间，超过 24 小时后跳转到 `/logout-and-reauth`，触发浏览器重新认证。
+- 前端会记录本浏览器的登录时间，超过 24 小时后跳转到 `/logout-and-reauth`，触发浏览器重新认证。这是浏览器侧的便利逻辑（JS + localStorage），并不是安全边界——攻击者禁用 JS 或篡改 localStorage 都可以绕过它。真正的过期由服务端 Cookie 的 `Max-Age` 与服务端 session store 共同强制：到点后 cookie 被浏览器丢弃，store 内的票据也会被 prune，受保护接口照常返回 401。
 
 ### 可选 TOTP 2FA
 
@@ -189,19 +189,19 @@ otpauth://totp/XiMonitor:viewer?secret=<totp_secret>&issuer=XiMonitor
 2FA 行为说明：
 
 - 登录流程是 `Basic Auth -> /verify-2fa 输入 6 位 TOTP -> 进入面板`。
-- TOTP 校验允许前后各一个 30 秒窗口的时钟偏差。
-- Basic Auth 通过后的 TOTP 等待窗口是 5 分钟。
-- 2FA 通过后的会话有效期是 24 小时，cookie 为 `HttpOnly`、`SameSite=Strict`；如果 `public_base_url` 是 `https://`，还会自动带 `Secure`。
+- TOTP 校验允许前后各一个 30 秒窗口的时钟偏差，并以常量时间比较 code，同一个 30 秒步长在 90 秒内不允许被两次使用（RFC 6238 §5.2 重放防御）。
+- Basic Auth 通过后的 TOTP 等待窗口是 5 分钟。同一个 pending session 连续 5 次输错 TOTP 即被强制失效，攻击者必须重新走 Basic Auth 才能再次尝试；客户端 IP 还会被 `[ws] auth_fail_*` 阈值限流。
+- 2FA 通过后的会话有效期是 24 小时，cookie 为 `HttpOnly`、`SameSite=Strict`；`public_base_url` 必须是 `https://`，cookie 会带 `Secure`——否则启动时会拒绝配置，避免 TOTP 与 cookie 在明文链路上传输。
 - 2FA 默认关闭，旧配置不需要修改即可继续运行。
 
 ### Agent Token 生命周期
 
 - 每个节点都有独立 token，存放在服务端 `server.json` 中。
 - 新签发或轮换的 node token 默认 90 天有效。
-- 服务端在 WebSocket `hello` 阶段检查 token 是否过期，过期会拒绝接入并记录错误。
-- 已认证的长连接会在 token 距离过期不足 7 天时自动刷新；服务端下发新 token，Agent 会更新内存中的 token，并原子写回 `agent.toml`。
+- 服务端在 WebSocket `hello` 阶段检查 token 是否过期，过期时会先下发一条 `token expired; run install-agent --rotate-token...` 的 Error notice 再关闭连接，方便运维从 Agent 日志直接看到补救步骤。
+- 已认证的长连接会在 token 距离过期不足 7 天时自动刷新；服务端先把刷新帧发出去，确认 send 成功后才把会话内的 token 视为新值，避免"server 内存里是新 token 但 agent 没收到"的不一致状态。Agent 收到后用 fsync + 0o600 原子写回 `agent.toml`，crash 不会留下空文件。
 - 旧版 `server.json` 中没有过期时间的 token 会在节点下一次在线会话里被自动刷新成 90 天 token。
-- 如果某台 Agent 离线超过 token 有效期，它无法再用旧 token 自动刷新，需要在服务端重新执行 `install-agent --rotate-token` 或重新安装该节点。
+- 如果某台 Agent 离线超过 token 有效期，它无法再用旧 token 自动刷新；Agent 进入 1 小时间隔的退避，等运维在服务端执行 `install-agent --rotate-token` 并替换该节点的 `agent.toml` 后才能恢复。
 
 ## Nginx 反代示例
 
