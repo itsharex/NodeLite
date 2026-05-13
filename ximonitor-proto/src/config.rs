@@ -325,6 +325,15 @@ impl RawServerConfigFile {
         if let Some(secret) = totp_secret.as_deref() {
             validate_totp_secret("auth.totp_secret", secret)?;
         }
+        // 没有 HTTPS,2FA 是个剧场:Cookie 与 TOTP code 都会在明文链路上传输,
+        // 攻击者一次嗅探即可越过二次验证。所以 enable_2fa = true 时,
+        // 必须使用 https:// 的 public_base_url —— 即便 listen 是回环地址,
+        // 也得借此提醒部署人员前面必须有 TLS 终结。
+        if enable_2fa && !self.server.public_base_url.starts_with("https://") {
+            return Err(ConfigError::new(
+                "server.public_base_url must use https:// when auth.enable_2fa = true",
+            ));
+        }
 
         // 用户名与密码必须成对出现:任意一个单独存在都视为配置错误。
         let readonly_auth = match (
@@ -824,6 +833,28 @@ mod tests {
         .expect_err("2fa without totp secret should fail");
 
         assert!(error.to_string().contains("auth.totp_secret"));
+    }
+
+    #[test]
+    fn rejects_2fa_with_plaintext_public_base_url() {
+        let error = parse_server_config(
+            r#"
+            [server]
+            listen = "127.0.0.1:8080"
+            public_base_url = "http://monitor.example.com"
+            insecure_allow_http = true
+
+            [auth]
+            username = "viewer"
+            password = "secret123"
+            enable_2fa = true
+            totp_secret = "JBSWY3DPEHPK3PXP"
+            "#,
+        )
+        .expect_err("2fa over plaintext http should be rejected");
+
+        assert!(error.to_string().contains("public_base_url"));
+        assert!(error.to_string().contains("https"));
     }
 
     #[test]
