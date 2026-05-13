@@ -105,6 +105,9 @@ struct NodeCommandArgs {
 struct AppState {
     history: HistoryStore,
     install_admission: InstallAdmissionController,
+    /// `/api/verify-2fa` 的 IP 维度限流器:与 `install_admission` 同型,
+    /// 但实例独立,避免安装接口的失败计数误伤 2FA 登录,反之亦然。
+    verify_2fa_admission: InstallAdmissionController,
     readiness: ServerReadiness,
     registry: NodeRegistry,
     shared: SharedState,
@@ -142,8 +145,18 @@ struct TwoFactorSessions {
 
 #[derive(Debug, Default)]
 struct TwoFactorSessionStore {
-    pending: HashMap<String, Instant>,
+    pending: HashMap<String, PendingSession>,
     authenticated: HashMap<String, Instant>,
+}
+
+/// 一条待二次验证的会话:除了过期时间,还跟踪该 pending token 的连续失败
+/// 验证次数。达到 `TWO_FACTOR_MAX_FAILED_ATTEMPTS` 后立即失效,迫使客户端
+/// 重新通过 Basic Auth 拿一个新的 pending token,从而把暴力破解的代价
+/// 抬高到与一次完整登录相当。
+#[derive(Debug, Clone, Copy)]
+struct PendingSession {
+    expires_at: Instant,
+    failed_attempts: u32,
 }
 
 /// 2FA 验证请求。
@@ -327,6 +340,11 @@ const INSECURE_TRANSPORT_WARN_INTERVAL_SECS: u64 = 900;
 const TWO_FACTOR_PENDING_SECS: u64 = 300;
 /// 2FA 完成后的浏览器会话有效期。
 const TWO_FACTOR_AUTH_SECS: u64 = 24 * 60 * 60;
+/// 单个 pending session 允许的最大 TOTP 错误尝试次数。达到后该 pending token
+/// 立即失效,客户端必须重新通过 Basic Auth 才能再次进入 verify-2fa 页面。
+/// 这与 `InstallAdmissionController` 的 IP 维度限流共同把 TOTP 暴力破解
+/// 的代价压到不可接受的水平。
+const TWO_FACTOR_MAX_FAILED_ATTEMPTS: u32 = 5;
 const TWO_FACTOR_PENDING_COOKIE: &str = "ximonitor_2fa_pending";
 const TWO_FACTOR_AUTH_COOKIE: &str = "ximonitor_auth";
 /// Token 距离过期不足该天数时,服务端在已认证会话内主动轮换并下发新 token。
@@ -427,7 +445,13 @@ impl TwoFactorSessions {
         let expires_at = Instant::now() + Duration::from_secs(TWO_FACTOR_PENDING_SECS);
         let mut store = lock_mutex(&self.inner);
         prune_expired_sessions(&mut store, Instant::now());
-        store.pending.insert(token.clone(), expires_at);
+        store.pending.insert(
+            token.clone(),
+            PendingSession {
+                expires_at,
+                failed_attempts: 0,
+            },
+        );
         Ok(token)
     }
 
@@ -440,6 +464,24 @@ impl TwoFactorSessions {
     fn consume_pending(&self, token: &str) {
         let mut store = lock_mutex(&self.inner);
         store.pending.remove(token);
+    }
+
+    /// 记录一次 TOTP 错误尝试。返回值表示该 pending token 是否已经因连续
+    /// 失败而被强制失效;调用方据此决定向客户端返回的状态码与是否同时
+    /// 清掉 pending cookie。
+    fn record_failed_attempt(&self, token: &str) -> bool {
+        let mut store = lock_mutex(&self.inner);
+        prune_expired_sessions(&mut store, Instant::now());
+        let Some(session) = store.pending.get_mut(token) else {
+            // pending 已经被 prune 或 consume,等同于"已经失效"。
+            return true;
+        };
+        session.failed_attempts = session.failed_attempts.saturating_add(1);
+        if session.failed_attempts >= TWO_FACTOR_MAX_FAILED_ATTEMPTS {
+            store.pending.remove(token);
+            return true;
+        }
+        false
     }
 
     fn create_authenticated(&self) -> Result<String> {
@@ -464,7 +506,9 @@ impl TwoFactorSessions {
 }
 
 fn prune_expired_sessions(store: &mut TwoFactorSessionStore, now: Instant) {
-    store.pending.retain(|_, expires_at| *expires_at > now);
+    store
+        .pending
+        .retain(|_, session| session.expires_at > now);
     store
         .authenticated
         .retain(|_, expires_at| *expires_at > now);
@@ -694,6 +738,13 @@ async fn run_server(config_path: &Path) -> Result<()> {
         install_admission: InstallAdmissionController::new(InstallAdmissionConfig {
             // 复用 ws 子小节里同名的限流配置 —— 站在运维视角它们是同一组
             // "认证失败暴力策略"参数,没必要再多开一组。
+            auth_fail_window_secs: config.ws.auth_fail_window_secs,
+            auth_fail_max_attempts: config.ws.auth_fail_max_attempts,
+            auth_block_secs: config.ws.auth_block_secs,
+        }),
+        verify_2fa_admission: InstallAdmissionController::new(InstallAdmissionConfig {
+            // 与 install / ws 同一组阈值,但实例独立 —— 攻击者用 install
+            // 失败把 IP 撞到封禁,不应该把同一时间的合法 2FA 登录也封掉。
             auth_fail_window_secs: config.ws.auth_fail_window_secs,
             auth_fail_max_attempts: config.ws.auth_fail_max_attempts,
             auth_block_secs: config.ws.auth_block_secs,
@@ -938,35 +989,63 @@ async fn verify_2fa_page() -> Html<&'static str> {
 /// 2FA 验证 API:验证 TOTP 码,成功后设置完整认证 cookie。
 async fn verify_2fa_api(
     State(state): State<AppState>,
+    ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Json(request): Json<Verify2FARequest>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<Verify2FAError>)> {
+    let client_ip = resolve_client_ip(state.shared.config().listen, peer_addr, &headers);
+    if let Err(retry_after_secs) = state.verify_2fa_admission.check(client_ip) {
+        return Err((
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(Verify2FAError {
+                error: format!("Too many failed attempts; retry after {retry_after_secs}s"),
+            }),
+        ));
+    }
+
     let Some(pending_token) = cookie_value(&headers, TWO_FACTOR_PENDING_COOKIE) else {
+        state.verify_2fa_admission.record_auth_failure(client_ip);
         return Err((
             StatusCode::UNAUTHORIZED,
             Json(Verify2FAError {
-                error: "No pending 2FA session".to_string(),
+                error: "Verification failed".to_string(),
             }),
         ));
     };
 
     if !state.two_factor_sessions.pending_exists(&pending_token) {
+        state.verify_2fa_admission.record_auth_failure(client_ip);
         return Err((
             StatusCode::UNAUTHORIZED,
             Json(Verify2FAError {
-                error: "2FA session expired".to_string(),
+                error: "Verification failed".to_string(),
             }),
         ));
     }
 
     // 验证 TOTP 码
     if !verify_totp(&state, &request.code) {
-        return Err((
-            StatusCode::UNAUTHORIZED,
-            Json(Verify2FAError {
-                error: "Invalid code".to_string(),
-            }),
-        ));
+        let pending_invalidated = state
+            .two_factor_sessions
+            .record_failed_attempt(&pending_token);
+        state.verify_2fa_admission.record_auth_failure(client_ip);
+        let secure = secure_cookies(&state);
+        let body = Json(Verify2FAError {
+            error: "Verification failed".to_string(),
+        });
+        // 该 pending token 已经被 record_failed_attempt 强制失效,主动让浏览器
+        // 删掉对应的 cookie 以免下一次请求继续无谓地带上它。
+        let response = if pending_invalidated {
+            (
+                StatusCode::UNAUTHORIZED,
+                AppendHeaders([expire_cookie(TWO_FACTOR_PENDING_COOKIE, secure)]),
+                body,
+            )
+                .into_response()
+        } else {
+            (StatusCode::UNAUTHORIZED, body).into_response()
+        };
+        return Ok(response);
     }
 
     let auth_token = state
@@ -981,6 +1060,7 @@ async fn verify_2fa_api(
             )
         })?;
     state.two_factor_sessions.consume_pending(&pending_token);
+    state.verify_2fa_admission.clear_auth_failures(client_ip);
     let secure = secure_cookies(&state);
 
     // 验证成功:设置只包含随机票据的完整认证 cookie。
@@ -995,7 +1075,8 @@ async fn verify_2fa_api(
             ),
             expire_cookie(TWO_FACTOR_PENDING_COOKIE, secure),
         ]),
-    ))
+    )
+        .into_response())
 }
 
 /// 验证 TOTP 码是否正确。
@@ -2365,6 +2446,11 @@ mod tests {
                 auth_fail_max_attempts: 6,
                 auth_block_secs: 600,
             }),
+            verify_2fa_admission: InstallAdmissionController::new(InstallAdmissionConfig {
+                auth_fail_window_secs: 300,
+                auth_fail_max_attempts: 6,
+                auth_block_secs: 600,
+            }),
             readiness: ServerReadiness::new(false),
             registry: runtime
                 .block_on(NodeRegistry::load(config.node_registry_path.as_path()))
@@ -2427,6 +2513,29 @@ mod tests {
         assert!(sessions.is_authenticated(&token));
         sessions.remove_authenticated(&token);
         assert!(!sessions.is_authenticated(&token));
+    }
+
+    #[test]
+    fn pending_session_invalidated_after_max_failed_attempts() {
+        let sessions = TwoFactorSessions::new();
+        let token = sessions
+            .create_pending()
+            .expect("pending session should be created");
+        assert!(sessions.pending_exists(&token));
+
+        // 前 N-1 次失败:pending 仍然有效。
+        for _ in 0..(super::TWO_FACTOR_MAX_FAILED_ATTEMPTS - 1) {
+            assert!(!sessions.record_failed_attempt(&token));
+            assert!(sessions.pending_exists(&token));
+        }
+
+        // 第 N 次失败:pending 必须被强制失效。
+        assert!(sessions.record_failed_attempt(&token));
+        assert!(!sessions.pending_exists(&token));
+
+        // 已经被失效的 token 再次记录失败时,应当也返回 true(等同已失效),
+        // 防止调用方因为找不到 pending 而漏掉"通知客户端清 cookie"的动作。
+        assert!(sessions.record_failed_attempt(&token));
     }
 
     #[test]
@@ -2535,6 +2644,11 @@ mod tests {
             let state = AppState {
                 history: HistoryStore::new(config.history_db_path.clone()),
                 install_admission: InstallAdmissionController::new(InstallAdmissionConfig {
+                    auth_fail_window_secs: 300,
+                    auth_fail_max_attempts: 6,
+                    auth_block_secs: 600,
+                }),
+                verify_2fa_admission: InstallAdmissionController::new(InstallAdmissionConfig {
                     auth_fail_window_secs: 300,
                     auth_fail_max_attempts: 6,
                     auth_block_secs: 600,
