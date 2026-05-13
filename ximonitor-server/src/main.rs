@@ -1737,19 +1737,22 @@ async fn handle_socket(
                                 }
                                 match state.registry.refresh_token(&node_id).await {
                                     Ok((new_token, expires_at)) => {
-                                        session_token = new_token.clone();
                                         let response = WireMessage::RefreshTokenResponse(
                                             ximonitor_proto::RefreshTokenResponseMessage {
-                                                new_token,
+                                                new_token: new_token.clone(),
                                                 expires_at: expires_at.to_rfc3339(),
                                             },
                                         );
                                         let payload = serde_json::to_string(&response)
                                             .map_err(|error| anyhow!("failed to serialize refresh response: {error}"))?;
+                                        // 先发送、再替换本地 session_token。理由同
+                                        // `maybe_refresh_agent_token`:send 失败时不能
+                                        // 让 server 进入一个 agent 看不到的新状态。
                                         sender
                                             .send(Message::Text(payload.into()))
                                             .await
                                             .map_err(|error| anyhow!("failed to send refresh response: {error}"))?;
+                                        session_token = new_token;
                                         info!(node_id = %node_id, "token refreshed successfully");
                                     }
                                     Err(error) => {
@@ -1782,17 +1785,23 @@ async fn handle_socket(
                         warn!(node_id = %node_id, "closing websocket session after registry token change");
                         break Ok(());
                     }
-                    if let Some(refresh_response) = maybe_refresh_agent_token(
+                    if let Some(refresh) = maybe_refresh_agent_token(
                         &state.registry,
                         &node_id,
-                        &mut session_token,
                     )
                     .await?
                     {
+                        // 关键顺序:registry 已经在 refresh 内写盘,但本地
+                        // session_token 只有在帧成功推到 TCP 缓冲区后才替换 ——
+                        // 否则一旦 send 失败,我们就会处在"server 内存里是
+                        // 新 token、agent 持有旧 token"的不一致状态。
+                        // send 失败时 bubble 出去触发 session 结束,is_token_current
+                        // 在下一轮会发现 registry 已经轮换,让 agent 重连。
                         sender
-                            .send(Message::Text(refresh_response.into()))
+                            .send(Message::Text(refresh.payload.into()))
                             .await
                             .map_err(|error| anyhow!("failed to send token refresh response: {error}"))?;
+                        session_token = refresh.new_token;
                     }
 
                     prune_outstanding_pings(&mut outstanding_pings, ping_expiry);
@@ -1816,11 +1825,23 @@ async fn handle_socket(
     session_result
 }
 
+/// 临近过期时颁发新 token,把"序列化好的 JSON 帧 + 对应的新 token"打包返回。
+///
+/// 调用方负责把 `payload` 推送出去后再把自己的 `session_token` 替换成
+/// `new_token`,以保证两端视图同步:registry 内是新 token,agent 还没收到 → 暂时
+/// 不一致,但 server 内存里也仍持有旧 token,`is_token_current` 会在下一轮发现
+/// 不一致并主动关闭 session,从而触发 agent 重连。如果交换顺序,反而会让
+/// server 误以为已经协商完成,继续在新 token 下与一个仍持旧 token 的 agent
+/// 通信,最终走到 "wrong token" 的硬拒绝。
+struct PreparedTokenRefresh {
+    payload: String,
+    new_token: String,
+}
+
 async fn maybe_refresh_agent_token(
     registry: &NodeRegistry,
     node_id: &str,
-    session_token: &mut String,
-) -> Result<Option<String>> {
+) -> Result<Option<PreparedTokenRefresh>> {
     let refresh_after = Utc::now() + ChronoDuration::days(AGENT_TOKEN_REFRESH_BEFORE_EXPIRY_DAYS);
     let should_refresh = registry
         .token_expires_at(node_id)
@@ -1831,7 +1852,6 @@ async fn maybe_refresh_agent_token(
     }
 
     let (new_token, expires_at) = registry.refresh_token(node_id).await?;
-    *session_token = new_token.clone();
     info!(
         node_id = %node_id,
         expires_at = %expires_at.to_rfc3339(),
@@ -1839,12 +1859,12 @@ async fn maybe_refresh_agent_token(
     );
     let response =
         WireMessage::RefreshTokenResponse(ximonitor_proto::RefreshTokenResponseMessage {
-            new_token,
+            new_token: new_token.clone(),
             expires_at: expires_at.to_rfc3339(),
         });
     let payload = serde_json::to_string(&response)
         .map_err(|error| anyhow!("failed to serialize token refresh response: {error}"))?;
-    Ok(Some(payload))
+    Ok(Some(PreparedTokenRefresh { payload, new_token }))
 }
 
 /// 阻塞接收 Hello 帧;期间收到的 Ping/Pong 等控制帧会被忽略,其他业务帧视为协议错误。
