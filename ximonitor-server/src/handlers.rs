@@ -9,6 +9,7 @@ use axum::{Json, extract::Request};
 use chrono::{DateTime, TimeZone, Utc};
 use getrandom::fill as fill_random;
 use serde::{Deserialize, Serialize};
+use tokio::io::{AsyncReadExt, AsyncSeekExt, SeekFrom};
 use tokio::{fs, process::Command};
 use tracing::{error, info};
 
@@ -33,6 +34,8 @@ const DEFAULT_HISTORY_WINDOW_HOURS: u64 = 24;
 const DEFAULT_HISTORY_MAX_POINTS: usize = 480;
 /// 历史接口最多返回的样本点数。
 const MAX_HISTORY_MAX_POINTS: usize = 1440;
+const SERVER_UPDATE_LOG_PATH: &str = "/tmp/ximonitor-server-web-update.log";
+const MAX_UPDATE_LOG_CHUNK_BYTES: u64 = 128 * 1024;
 
 /// `/api/bootstrap` 的响应结构,只读、用于前端启动期获取基本元数据。
 #[derive(Debug, Serialize)]
@@ -104,6 +107,19 @@ pub(crate) struct ChangePasswordRequest {
 pub(crate) struct StartServerUpdateRequest {
     current_password: Option<String>,
     code: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct ServerUpdateLogQuery {
+    offset: Option<u64>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct ServerUpdateLogResponse {
+    exists: bool,
+    offset: u64,
+    next_offset: u64,
+    text: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -576,6 +592,65 @@ pub(crate) async fn start_server_update(
     }
 }
 
+pub(crate) async fn server_update_log(Query(query): Query<ServerUpdateLogQuery>) -> Response {
+    let metadata = match fs::metadata(SERVER_UPDATE_LOG_PATH).await {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Json(ServerUpdateLogResponse {
+                exists: false,
+                offset: 0,
+                next_offset: 0,
+                text: String::new(),
+            })
+            .into_response();
+        }
+        Err(error) => {
+            error!(error = ?error, path = SERVER_UPDATE_LOG_PATH, "failed to inspect update log");
+            return settings_json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to inspect update log",
+            );
+        }
+    };
+
+    let file_len = metadata.len();
+    let requested_offset = query.offset.unwrap_or(0).min(file_len);
+    let capped_offset = requested_offset.max(file_len.saturating_sub(MAX_UPDATE_LOG_CHUNK_BYTES));
+    let mut file = match fs::File::open(SERVER_UPDATE_LOG_PATH).await {
+        Ok(file) => file,
+        Err(error) => {
+            error!(error = ?error, path = SERVER_UPDATE_LOG_PATH, "failed to open update log");
+            return settings_json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to open update log",
+            );
+        }
+    };
+    if let Err(error) = file.seek(SeekFrom::Start(capped_offset)).await {
+        error!(error = ?error, path = SERVER_UPDATE_LOG_PATH, "failed to seek update log");
+        return settings_json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to read update log",
+        );
+    }
+    let mut bytes = Vec::new();
+    if let Err(error) = file.read_to_end(&mut bytes).await {
+        error!(error = ?error, path = SERVER_UPDATE_LOG_PATH, "failed to read update log");
+        return settings_json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to read update log",
+        );
+    }
+    let next_offset = capped_offset.saturating_add(bytes.len() as u64);
+    Json(ServerUpdateLogResponse {
+        exists: true,
+        offset: capped_offset,
+        next_offset,
+        text: String::from_utf8_lossy(&bytes).into_owned(),
+    })
+    .into_response()
+}
+
 fn settings_confirmation_error_for_sensitive_action(
     state: &AppState,
     auth: &ReadonlyAuthConfig,
@@ -856,12 +931,28 @@ fn server_update_shell_command() -> String {
         env!("CARGO_PKG_REPOSITORY")
     );
     [
-        "set -eu".to_string(),
-        "log=/tmp/ximonitor-server-web-update.log".to_string(),
+        "set -u".to_string(),
+        format!("log={}", shell_quote(SERVER_UPDATE_LOG_PATH)),
         "tmp_script=\"$(mktemp /tmp/ximonitor-install-server.XXXXXX)\"".to_string(),
         "trap 'rm -f \"$tmp_script\"' EXIT".to_string(),
+        ": >\"$log\"".to_string(),
+        "echo \"ximonitor-update: started at $(date -u +%Y-%m-%dT%H:%M:%SZ)\" >>\"$log\"".to_string(),
         format!(
-            "{{ curl -fsSL {} -o \"$tmp_script\"; chmod 0700 \"$tmp_script\"; XIMONITOR_SERVER_MODE=upgrade sh \"$tmp_script\"; }} >>\"$log\" 2>&1",
+            "echo \"ximonitor-update: downloading {}\" >>\"$log\"",
+            shell_quote(&installer_url)
+        ),
+        format!(
+            "curl -fsSL {} -o \"$tmp_script\" >>\"$log\" 2>&1",
+            shell_quote(&installer_url)
+        ),
+        "download_status=$?".to_string(),
+        "if [ \"$download_status\" -ne 0 ]; then echo \"ximonitor-update: finished exit=$download_status at $(date -u +%Y-%m-%dT%H:%M:%SZ)\" >>\"$log\"; exit \"$download_status\"; fi".to_string(),
+        "chmod 0700 \"$tmp_script\" >>\"$log\" 2>&1".to_string(),
+        "chmod_status=$?".to_string(),
+        "if [ \"$chmod_status\" -ne 0 ]; then echo \"ximonitor-update: finished exit=$chmod_status at $(date -u +%Y-%m-%dT%H:%M:%SZ)\" >>\"$log\"; exit \"$chmod_status\"; fi".to_string(),
+        "echo \"ximonitor-update: running installer in upgrade mode\" >>\"$log\"".to_string(),
+        format!(
+            "XIMONITOR_SERVER_MODE=upgrade sh \"$tmp_script\" >>\"$log\" 2>&1; update_status=$?; echo \"ximonitor-update: finished exit=$update_status at $(date -u +%Y-%m-%dT%H:%M:%SZ)\" >>\"$log\"; exit \"$update_status\" # {}",
             shell_quote(&installer_url)
         ),
     ]
