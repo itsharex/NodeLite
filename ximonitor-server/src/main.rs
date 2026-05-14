@@ -50,8 +50,8 @@ use crate::cli::{Cli, Command, install_agent_command, issue_node_command, upgrad
 use crate::handlers::{
     bootstrap, change_readonly_password, disable_two_factor, enable_two_factor, healthz, index,
     install_agent_script, install_bootstrap, logout_and_reauth, node_detail, node_history,
-    node_status, nodes, overview, readyz, require_readonly_auth, settings, start_two_factor_setup,
-    ui_i18n_asset, verify_2fa_api, verify_2fa_page,
+    node_status, nodes, overview, readyz, require_readonly_auth, settings, start_server_update,
+    start_two_factor_setup, ui_i18n_asset, verify_2fa_api, verify_2fa_page,
 };
 use crate::history::HistoryStore;
 use crate::registry::NodeRegistry;
@@ -216,6 +216,7 @@ async fn run_server(config_path: &Path) -> Result<()> {
         .route("/api/nodes/{node_id}/history", get(node_history))
         .route("/api/settings", get(settings))
         .route("/api/settings/password", post(change_readonly_password))
+        .route("/api/settings/update/server", post(start_server_update))
         .route("/api/settings/2fa/start", post(start_two_factor_setup))
         .route("/api/settings/2fa/enable", post(enable_two_factor))
         .route("/api/settings/2fa/disable", post(disable_two_factor))

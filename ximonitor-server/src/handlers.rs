@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use std::process::Stdio;
 
 use axum::extract::{ConnectInfo, Path as AxumPath, Query, State};
 use axum::http::{HeaderMap, StatusCode, header};
@@ -8,8 +9,8 @@ use axum::{Json, extract::Request};
 use chrono::{DateTime, TimeZone, Utc};
 use getrandom::fill as fill_random;
 use serde::{Deserialize, Serialize};
-use tokio::fs;
-use tracing::error;
+use tokio::{fs, process::Command};
+use tracing::{error, info};
 
 use crate::AppState;
 use crate::admission::resolve_client_ip;
@@ -97,6 +98,12 @@ pub(crate) struct SettingsAgentToken {
 pub(crate) struct ChangePasswordRequest {
     current_password: String,
     new_password: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct StartServerUpdateRequest {
+    current_password: Option<String>,
+    code: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -509,6 +516,112 @@ pub(crate) async fn change_readonly_password(
         .into_response()
 }
 
+/// 从网页端手动触发一次服务端升级。
+///
+/// 这是一个显式、实验性的运维入口:若开启 2FA,调用方必须输入当前 TOTP;
+/// 否则回退到当前只读密码确认。通过确认后,服务端在后台拉取 GitHub latest
+/// release 里的安装脚本并以 upgrade 模式运行。这里不等待子进程结束,因为升级
+/// 过程可能会重启当前服务。
+pub(crate) async fn start_server_update(
+    State(state): State<AppState>,
+    Json(request): Json<StartServerUpdateRequest>,
+) -> Response {
+    let current_auth = {
+        let auth = state.readonly_auth.read().await;
+        auth.config.clone()
+    };
+    let Some(current_auth) = current_auth else {
+        return settings_json_error(StatusCode::CONFLICT, "readonly auth is not enabled");
+    };
+    if let Err(response) = verify_settings_confirmation_for_sensitive_action(
+        &state,
+        &current_auth,
+        request.current_password.as_deref(),
+        request.code.as_deref(),
+    ) {
+        return response;
+    }
+
+    let command = server_update_shell_command();
+    match Command::new("sh")
+        .arg("-c")
+        .arg(command)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        Ok(_) => {
+            info!("manual server update started from settings page");
+            (
+                StatusCode::ACCEPTED,
+                Json(SettingsActionResponse {
+                    ok: true,
+                    message: "server update started; the service may restart shortly".to_string(),
+                }),
+            )
+                .into_response()
+        }
+        Err(error) => {
+            error!(error = ?error, "failed to start manual server update");
+            settings_json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to start server update",
+            )
+        }
+    }
+}
+
+fn verify_settings_confirmation_for_sensitive_action(
+    state: &AppState,
+    auth: &ReadonlyAuthConfig,
+    current_password: Option<&str>,
+    code: Option<&str>,
+) -> Result<(), Response> {
+    if !auth.enable_2fa {
+        let Some(current_password) = current_password.filter(|password| !password.is_empty())
+        else {
+            return Err(settings_json_error(
+                StatusCode::UNAUTHORIZED,
+                "current password is required",
+            ));
+        };
+        if constant_time_compare_bytes(auth.password.as_bytes(), current_password.as_bytes()) {
+            return Ok(());
+        }
+        return Err(settings_json_error(
+            StatusCode::UNAUTHORIZED,
+            "current password is incorrect",
+        ));
+    }
+    let Some(secret) = auth.totp_secret.as_deref().and_then(decode_totp_secret) else {
+        return Err(settings_json_error(
+            StatusCode::CONFLICT,
+            "2FA secret is not configured",
+        ));
+    };
+    let Some(code) = code.map(str::trim).filter(|code| !code.is_empty()) else {
+        return Err(settings_json_error(
+            StatusCode::UNAUTHORIZED,
+            "verification code is required",
+        ));
+    };
+    let Some(step) = verify_totp_step(Some(&secret), code) else {
+        return Err(settings_json_error(
+            StatusCode::UNAUTHORIZED,
+            "invalid verification code",
+        ));
+    };
+    if state.two_factor_sessions.is_totp_step_used(step) {
+        return Err(settings_json_error(
+            StatusCode::UNAUTHORIZED,
+            "verification code already used",
+        ));
+    }
+    state.two_factor_sessions.mark_totp_step_used(step);
+    Ok(())
+}
+
 /// 开始网页端 2FA 绑定:生成一个新 TOTP secret 和本地 SVG 二维码。
 ///
 /// 注意这里不写配置文件;只有用户用认证器 App 扫码并输入正确验证码后,
@@ -716,6 +829,28 @@ fn validate_password_for_settings(password: &str) -> Result<(), &'static str> {
         return Err("new password must include both letters and digits");
     }
     Ok(())
+}
+
+fn server_update_shell_command() -> String {
+    let installer_url = format!(
+        "{}/releases/latest/download/install-server.sh",
+        env!("CARGO_PKG_REPOSITORY")
+    );
+    [
+        "set -eu".to_string(),
+        "log=/tmp/ximonitor-server-web-update.log".to_string(),
+        "tmp_script=\"$(mktemp /tmp/ximonitor-install-server.XXXXXX)\"".to_string(),
+        "trap 'rm -f \"$tmp_script\"' EXIT".to_string(),
+        format!(
+            "{{ curl -fsSL {} -o \"$tmp_script\"; chmod 0700 \"$tmp_script\"; XIMONITOR_SERVER_MODE=upgrade sh \"$tmp_script\"; }} >>\"$log\" 2>&1",
+            shell_quote(&installer_url)
+        ),
+    ]
+    .join("\n")
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 async fn persist_auth_password_change(
