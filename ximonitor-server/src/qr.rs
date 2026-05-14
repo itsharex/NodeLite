@@ -143,15 +143,17 @@ impl QrMatrix {
     }
 
     fn draw_finder(&mut self, x: usize, y: usize) {
-        for dy in 0..8 {
-            for dx in 0..8 {
-                let xx = x + dx;
-                let yy = y + dy;
-                if xx >= SIZE || yy >= SIZE {
-                    continue;
-                }
-                let dark = dx < 7
-                    && dy < 7
+        // Finder patterns require a one-module white separator on every side
+        // that is inside the symbol. Without reserving the left/top separators
+        // for the top-right and bottom-left finders, later data bits can be
+        // written into those cells and make the QR unreadable for stricter apps
+        // such as Microsoft Authenticator.
+        for yy in y.saturating_sub(1)..=(y + 7).min(SIZE - 1) {
+            for xx in x.saturating_sub(1)..=(x + 7).min(SIZE - 1) {
+                let in_pattern = xx >= x && xx < x + 7 && yy >= y && yy < y + 7;
+                let dx = xx.saturating_sub(x);
+                let dy = yy.saturating_sub(y);
+                let dark = in_pattern
                     && (dx == 0
                         || dx == 6
                         || dy == 0
@@ -223,6 +225,10 @@ impl QrMatrix {
             }
             right -= 2;
         }
+        debug_assert!(
+            bit_index >= bits.len(),
+            "QR symbol has fewer data modules than codewords require"
+        );
     }
 
     fn apply_mask_0(&mut self) {
