@@ -1,13 +1,13 @@
 /// 一个很小的 QR Code SVG 生成器,专门用于 TOTP 绑定页。
 ///
-/// 这里固定使用 QR Model 2 / Version 5 / Error Correction L / Byte mode,
+/// 这里固定使用 QR Model 2 / Version 6 / Error Correction L / Byte mode,
 /// 容量足够容纳 XiMonitor 的 `otpauth://` URI。项目不把 TOTP secret 发给
 /// 第三方二维码服务,所以需要在本地生成可扫码的 SVG。
-const VERSION: usize = 5;
+const VERSION: usize = 6;
 const SIZE: usize = 17 + VERSION * 4;
-const DATA_CODEWORDS: usize = 108;
-const ECC_CODEWORDS: usize = 26;
-const MAX_BYTE_PAYLOAD: usize = 106;
+const DATA_CODEWORDS: usize = 136;
+const ECC_CODEWORDS: usize = 36;
+const MAX_BYTE_PAYLOAD: usize = 134;
 const FORMAT_XOR_MASK: u16 = 0x5412;
 const FORMAT_GENERATOR: u16 = 0x0537;
 
@@ -137,7 +137,7 @@ impl QrMatrix {
         self.draw_finder(SIZE - 7, 0);
         self.draw_finder(0, SIZE - 7);
         self.draw_timing_patterns();
-        self.draw_alignment(30, 30);
+        self.draw_alignment(34, 34);
         self.set_function(8, VERSION * 4 + 9, true);
         self.reserve_format_areas();
     }
@@ -318,18 +318,18 @@ mod tests {
     #[test]
     fn renders_totp_uri_as_inline_svg() {
         let svg = qr_svg_for_text(
-            "otpauth://totp/XiMonitor:viewer?secret=JBSWY3DPEHPK3PXP&issuer=XiMonitor",
+            "otpauth://totp/viewer?secret=JBSWY3DPEHPK3PXP&issuer=XiMonitor&algorithm=SHA1&digits=6&period=30",
         )
-        .expect("sample otpauth URI should fit in version 5-L");
+        .expect("sample otpauth URI should fit in version 6-L");
 
         assert!(svg.starts_with("<svg"));
-        assert!(svg.contains("viewBox=\"0 0 45 45\""));
+        assert!(svg.contains("viewBox=\"0 0 49 49\""));
         assert!(svg.contains("<rect"));
     }
 
     #[test]
     fn rejects_payloads_that_do_not_fit_fixed_qr_version() {
-        let payload = "x".repeat(107);
+        let payload = "x".repeat(135);
         assert!(qr_svg_for_text(&payload).is_err());
     }
 }

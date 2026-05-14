@@ -1022,8 +1022,7 @@ fn generate_totp_secret() -> anyhow::Result<String> {
 fn otpauth_uri(username: &str, secret: &str) -> String {
     let issuer = "XiMonitor";
     format!(
-        "otpauth://totp/{}:{}?secret={}&issuer={}",
-        percent_encode_component(issuer),
+        "otpauth://totp/{}?secret={}&issuer={}&algorithm=SHA1&digits=6&period=30",
         percent_encode_component(username),
         percent_encode_component(secret),
         percent_encode_component(issuer)
@@ -1346,7 +1345,7 @@ totp_secret = "JBSWY3DPEHPK3PXP"
 
         assert_eq!(
             uri,
-            "otpauth://totp/XiMonitor:viewer%40example.com?secret=JBSWY3DPEHPK3PXP&issuer=XiMonitor"
+            "otpauth://totp/viewer%40example.com?secret=JBSWY3DPEHPK3PXP&issuer=XiMonitor&algorithm=SHA1&digits=6&period=30"
         );
     }
 }

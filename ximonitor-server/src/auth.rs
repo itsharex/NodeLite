@@ -291,14 +291,20 @@ pub fn verify_totp_step(totp_secret: Option<&[u8]>, code: &str) -> Option<u64> {
             now_step.checked_add(offset as u64)
         };
         let Some(step) = step else { continue };
-        let expected = totp_custom::<Sha1>(30, 6, secret, step);
-        let expected_str = format!("{expected:06}");
-        if constant_time_compare_bytes(expected_str.as_bytes(), code.as_bytes()) {
+        let expected = totp_code_for_step(secret, step);
+        if constant_time_compare_bytes(expected.as_bytes(), code.as_bytes()) {
             return Some(step);
         }
     }
 
     None
+}
+
+fn totp_code_for_step(secret: &[u8], step: u64) -> String {
+    // `totp_lite` expects Unix seconds and divides by `period` internally.
+    // We track replay protection by step, so convert the step back to the
+    // first second in that 30-second window before generating the code.
+    totp_custom::<Sha1>(30, 6, secret, step.saturating_mul(30))
 }
 
 /// 长度 + 内容都按常量时间比较,避免依据"首个不同字节位置"做旁路。
@@ -355,4 +361,18 @@ pub fn expire_cookie(name: &'static str, secure: bool) -> (header::HeaderName, S
 
 pub fn secure_cookies(config: &ServerConfig) -> bool {
     config.public_base_url.starts_with("https://")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::totp_code_for_step;
+
+    #[test]
+    fn totp_generation_uses_unix_seconds_for_rfc_6238_compatibility() {
+        let secret = b"12345678901234567890";
+
+        // RFC 6238 Appendix B gives SHA1/8-digit code 94287082 at Unix time
+        // 59. With 6 digits the same dynamic truncation becomes 287082.
+        assert_eq!(totp_code_for_step(secret, 59 / 30), "287082");
+    }
 }
