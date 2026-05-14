@@ -13,10 +13,9 @@ use tracing::error;
 use crate::AppState;
 use crate::admission::resolve_client_ip;
 use crate::auth::{
-    TWO_FACTOR_AUTH_COOKIE, TWO_FACTOR_AUTH_SECS, TWO_FACTOR_PENDING_COOKIE,
+    ReadonlyRouteAuth, TWO_FACTOR_AUTH_COOKIE, TWO_FACTOR_AUTH_SECS, TWO_FACTOR_PENDING_COOKIE,
     TWO_FACTOR_PENDING_SECS, Verify2FAError, Verify2FARequest, auth_cookie,
     constant_time_compare_bytes, cookie_value, expire_cookie, secure_cookies, verify_totp_step,
-    ReadonlyRouteAuth,
 };
 use crate::registry::render_agent_config;
 use crate::ui::{UI_I18N_JSON, index_html, node_html};
@@ -502,15 +501,17 @@ fn validate_password_for_settings(password: &str) -> Result<(), &'static str> {
     if password.len() < 8 {
         return Err("new password must be at least 8 characters");
     }
-    if !password.chars().any(|c| c.is_alphabetic())
-        || !password.chars().any(|c| c.is_ascii_digit())
+    if !password.chars().any(|c| c.is_alphabetic()) || !password.chars().any(|c| c.is_ascii_digit())
     {
         return Err("new password must include both letters and digits");
     }
     Ok(())
 }
 
-async fn persist_auth_password_change(path: &std::path::Path, password: &str) -> anyhow::Result<()> {
+async fn persist_auth_password_change(
+    path: &std::path::Path,
+    password: &str,
+) -> anyhow::Result<()> {
     let content = fs::read_to_string(path).await?;
     let updated = replace_auth_password(&content, password)?;
     parse_server_config(&updated)
