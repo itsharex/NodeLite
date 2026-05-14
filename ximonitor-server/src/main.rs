@@ -34,10 +34,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
+use axum::Router;
 use axum::extract::Request;
 use axum::http::{HeaderValue, header};
 use axum::middleware::{Next, from_fn, from_fn_with_state};
-use axum::Router;
 use axum::response::Response;
 use axum::routing::{get, post};
 use clap::Parser;
@@ -95,8 +95,7 @@ struct ServerReadiness {
 
 /// 不安全传输警告的输出间隔(秒)。
 const INSECURE_TRANSPORT_WARN_INTERVAL_SECS: u64 = 900;
-const PROTECTED_CONTENT_SECURITY_POLICY: &str =
-    "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; \
+const PROTECTED_CONTENT_SECURITY_POLICY: &str = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; \
      img-src 'self' data:; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'";
 const PROTECTED_CACHE_CONTROL: &str = "no-store, no-cache, must-revalidate";
 
@@ -547,11 +546,11 @@ mod tests {
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    use axum::Router;
     use axum::body::Body;
     use axum::extract::{ConnectInfo, State};
     use axum::http::{HeaderMap, Request, StatusCode, header};
     use axum::middleware::{from_fn, from_fn_with_state};
-    use axum::Router;
     use chrono::Utc;
     use tokio::runtime::Runtime;
     use tokio::sync::RwLock;
@@ -559,8 +558,7 @@ mod tests {
 
     use super::{
         AppState, ReadonlyRouteAuth, ServerReadiness, TwoFactorSessions,
-        set_protected_response_headers,
-        uses_insecure_remote_public_base_url, ws_handler,
+        set_protected_response_headers, uses_insecure_remote_public_base_url, ws_handler,
     };
     use crate::admission::{
         InstallAdmissionConfig, InstallAdmissionController, WsAdmissionController,
