@@ -96,7 +96,7 @@ struct ServerReadiness {
 /// 不安全传输警告的输出间隔(秒)。
 const INSECURE_TRANSPORT_WARN_INTERVAL_SECS: u64 = 900;
 const PROTECTED_CONTENT_SECURITY_POLICY: &str = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; \
-     img-src 'self' data:; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'";
+     img-src 'self' data:; connect-src 'self' https://raw.githubusercontent.com; base-uri 'none'; frame-ancestors 'none'; form-action 'self'";
 const PROTECTED_CACHE_CONTROL: &str = "no-store, no-cache, must-revalidate";
 
 impl ServerReadiness {
