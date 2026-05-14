@@ -33,8 +33,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
+use axum::extract::Request;
+use axum::http::{HeaderValue, header};
+use axum::middleware::{Next, from_fn, from_fn_with_state};
 use axum::Router;
-use axum::middleware::from_fn_with_state;
+use axum::response::Response;
 use axum::routing::{get, post};
 use clap::Parser;
 use tokio::fs;
@@ -90,6 +93,10 @@ struct ServerReadiness {
 
 /// 不安全传输警告的输出间隔(秒)。
 const INSECURE_TRANSPORT_WARN_INTERVAL_SECS: u64 = 900;
+const PROTECTED_CONTENT_SECURITY_POLICY: &str =
+    "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; \
+     img-src 'self' data:; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'";
+const PROTECTED_CACHE_CONTROL: &str = "no-store, no-cache, must-revalidate";
 
 impl ServerReadiness {
     fn new(history_available: bool) -> Self {
@@ -223,6 +230,7 @@ async fn run_server(config_path: &Path) -> Result<()> {
         .route("/api/settings/2fa/start", post(start_two_factor_setup))
         .route("/api/settings/2fa/enable", post(enable_two_factor))
         .route("/api/settings/2fa/disable", post(disable_two_factor))
+        .route_layer(from_fn(set_protected_response_headers))
         .route_layer(from_fn_with_state(state.clone(), require_readonly_auth));
     let app = Router::new()
         .route("/healthz", get(healthz))
@@ -265,6 +273,30 @@ async fn run_server(config_path: &Path) -> Result<()> {
     }
     info!("ximonitor server shutdown complete");
     Ok(())
+}
+
+/// 统一给受保护的 UI / API 响应补齐安全头,避免每个 handler 重复手写。
+async fn set_protected_response_headers(request: Request, next: Next) -> Response {
+    let mut response = next.run(request).await;
+    let headers = response.headers_mut();
+    headers.insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static(PROTECTED_CONTENT_SECURITY_POLICY),
+    );
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    headers.insert(
+        header::REFERRER_POLICY,
+        HeaderValue::from_static("strict-origin-when-cross-origin"),
+    );
+    headers.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static(PROTECTED_CACHE_CONTROL),
+    );
+    headers.insert(header::PRAGMA, HeaderValue::from_static("no-cache"));
+    response
 }
 
 /// 验证密码强度:至少 8 字符,包含字母和数字。
@@ -501,16 +533,19 @@ mod tests {
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use axum::Router;
     use axum::body::Body;
     use axum::extract::{ConnectInfo, State};
     use axum::http::{HeaderMap, Request, StatusCode, header};
+    use axum::middleware::{from_fn, from_fn_with_state};
+    use axum::Router;
     use chrono::Utc;
     use tokio::runtime::Runtime;
     use tokio::sync::RwLock;
+    use tower::util::ServiceExt;
 
     use super::{
         AppState, ReadonlyRouteAuth, ServerReadiness, TwoFactorSessions,
+        set_protected_response_headers,
         uses_insecure_remote_public_base_url, ws_handler,
     };
     use crate::admission::{
@@ -520,7 +555,7 @@ mod tests {
     use crate::handlers::{
         bootstrap, healthz, index, install_agent_script, install_bootstrap,
         is_well_formed_install_token, node_detail, node_history, node_status, nodes, overview,
-        readyz, ui_i18n_asset,
+        readyz, require_readonly_auth, ui_i18n_asset,
     };
     use crate::history::HistoryStore;
     use crate::registry::{IssueNodeRequest, NodeRegistry, issue_node};
@@ -849,6 +884,117 @@ mod tests {
             );
             assert_eq!(
                 bootstrap_response.headers().get(header::PRAGMA),
+                Some(&header::HeaderValue::from_static("no-cache")),
+            );
+
+            let _ = std::fs::remove_dir_all(&temp_dir);
+        });
+    }
+
+    #[test]
+    fn protected_routes_attach_security_headers() {
+        let runtime = Runtime::new().expect("runtime should build");
+        runtime.block_on(async {
+            let unique = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock should be monotonic enough")
+                .as_nanos();
+            let temp_dir =
+                std::env::temp_dir().join(format!("ximonitor-protected-header-test-{unique}"));
+            std::fs::create_dir_all(&temp_dir).expect("temp dir should exist");
+            let registry_path = temp_dir.join("server.json");
+            let config = Arc::new(ServerConfig {
+                listen: SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 8080)),
+                public_base_url: "https://monitor.example.com".to_string(),
+                insecure_allow_http: false,
+                readonly_auth: None,
+                ws: WsConfig {
+                    max_total_connections: 32,
+                    max_connections_per_ip: 8,
+                    auth_fail_window_secs: 300,
+                    auth_fail_max_attempts: 6,
+                    auth_block_secs: 600,
+                },
+                node_registry_path: registry_path.clone(),
+                history_db_path: temp_dir.join("history.sqlite3"),
+                snapshot_path: temp_dir.join("snapshot.json"),
+                stale_after_secs: 20,
+                ping_interval_secs: 10,
+                max_message_bytes: 65536,
+                refresh_interval_secs: 5,
+                ignored_filesystems: vec![],
+                agent_release_base_url: None,
+                agent_release_sha256_x86_64: None,
+                agent_release_sha256_aarch64: None,
+            });
+            let state = AppState {
+                history: HistoryStore::new(config.history_db_path.clone()),
+                install_admission: InstallAdmissionController::new(InstallAdmissionConfig {
+                    auth_fail_window_secs: 300,
+                    auth_fail_max_attempts: 6,
+                    auth_block_secs: 600,
+                }),
+                verify_2fa_admission: InstallAdmissionController::new(InstallAdmissionConfig {
+                    auth_fail_window_secs: 300,
+                    auth_fail_max_attempts: 6,
+                    auth_block_secs: 600,
+                }),
+                readiness: ServerReadiness::new(false),
+                registry: NodeRegistry::load(&registry_path)
+                    .await
+                    .expect("registry should load"),
+                shared: SharedState::new(config),
+                ws_admission: WsAdmissionController::new(&WsConfig {
+                    max_total_connections: 32,
+                    max_connections_per_ip: 8,
+                    auth_fail_window_secs: 300,
+                    auth_fail_max_attempts: 6,
+                    auth_block_secs: 600,
+                }),
+                readonly_auth: Arc::new(RwLock::new(ReadonlyRouteAuth::from_config(None))),
+                two_factor_sessions: TwoFactorSessions::new(),
+                config_path: Arc::new(temp_dir.join("server.toml")),
+            };
+            let app: Router = Router::new()
+                .route("/", get(index))
+                .route_layer(from_fn(set_protected_response_headers))
+                .route_layer(from_fn_with_state(state.clone(), require_readonly_auth))
+                .with_state(state);
+            let response = app
+                .oneshot(
+                    Request::builder()
+                        .uri("/")
+                        .body(Body::empty())
+                        .expect("request should build"),
+                )
+                .await
+                .expect("response should be produced");
+
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(
+                response.headers().get(header::CONTENT_SECURITY_POLICY),
+                Some(&header::HeaderValue::from_static(
+                    super::PROTECTED_CONTENT_SECURITY_POLICY,
+                )),
+            );
+            assert_eq!(
+                response.headers().get(header::X_CONTENT_TYPE_OPTIONS),
+                Some(&header::HeaderValue::from_static("nosniff")),
+            );
+            assert_eq!(
+                response.headers().get(header::REFERRER_POLICY),
+                Some(&header::HeaderValue::from_static(
+                    "strict-origin-when-cross-origin",
+                )),
+            );
+            assert_eq!(
+                response.headers().get(header::CACHE_CONTROL),
+                Some(&header::HeaderValue::from_static(
+                    super::PROTECTED_CACHE_CONTROL,
+                )),
+            );
+            assert_eq!(
+                response.headers().get(header::PRAGMA),
                 Some(&header::HeaderValue::from_static("no-cache")),
             );
 

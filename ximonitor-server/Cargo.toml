@@ -30,3 +30,4 @@ ximonitor-proto = { path = "../ximonitor-proto" }
 
 [dev-dependencies]
 tokio-tungstenite.workspace = true
+tower = "0.5"
