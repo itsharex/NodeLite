@@ -39,6 +39,10 @@ pub const DEFAULT_WS_AUTH_FAIL_WINDOW_SECS: u64 = 300;
 pub const DEFAULT_WS_AUTH_FAIL_MAX_ATTEMPTS: usize = 12;
 /// 触发封禁后的禁用时长(秒)。
 pub const DEFAULT_WS_AUTH_BLOCK_SECS: u64 = 900;
+/// 单个节点允许携带的最大标签数。
+pub const MAX_NODE_TAGS: usize = 64;
+/// 单个标签允许的最大字节数。
+pub const MAX_NODE_TAG_BYTES: usize = 256;
 
 /// 配置加载或校验过程中产生的错误。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -503,7 +507,7 @@ impl RawAgentConfigFile {
                 .agent
                 .hostname_override
                 .map(|value| value.trim().to_string()),
-            tags: normalize_string_list(self.agent.tags),
+            tags: normalize_tags("agent.tags", self.agent.tags)?,
         })
     }
 }
@@ -557,6 +561,28 @@ fn normalize_string_list(values: Vec<String>) -> Vec<String> {
     values.sort();
     values.dedup();
     values
+}
+
+fn normalize_tags(field: &str, values: Vec<String>) -> Result<Vec<String>, ConfigError> {
+    let values = normalize_string_list(values);
+    validate_tag_list(field, &values)?;
+    Ok(values)
+}
+
+fn validate_tag_list(field: &str, values: &[String]) -> Result<(), ConfigError> {
+    if values.len() > MAX_NODE_TAGS {
+        return Err(ConfigError::new(format!(
+            "{field} must contain at most {MAX_NODE_TAGS} tags"
+        )));
+    }
+    for (index, value) in values.iter().enumerate() {
+        if value.len() > MAX_NODE_TAG_BYTES {
+            return Err(ConfigError::new(format!(
+                "{field}[{index}] must be <= {MAX_NODE_TAG_BYTES} bytes"
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// 校验 SHA-256 摘要:长度必须是 64 个十六进制字符。
@@ -698,7 +724,8 @@ mod tests {
     use super::{
         DEFAULT_MAX_MESSAGE_BYTES, DEFAULT_WS_AUTH_BLOCK_SECS, DEFAULT_WS_AUTH_FAIL_MAX_ATTEMPTS,
         DEFAULT_WS_AUTH_FAIL_WINDOW_SECS, DEFAULT_WS_MAX_CONNECTIONS_PER_IP,
-        DEFAULT_WS_MAX_TOTAL_CONNECTIONS, parse_agent_config, parse_server_config,
+        DEFAULT_WS_MAX_TOTAL_CONNECTIONS, MAX_NODE_TAG_BYTES, parse_agent_config,
+        parse_server_config,
     };
 
     #[test]
@@ -792,6 +819,45 @@ mod tests {
         assert_eq!(config.node_id, "hk-01");
         assert_eq!(config.report_interval_secs, 7);
         assert_eq!(config.tags, vec!["apac", "edge"]);
+    }
+
+    #[test]
+    fn rejects_agent_config_with_too_many_tags() {
+        let tags = (0..1000)
+            .map(|index| format!("\"tag-{index}\""))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let input = format!(
+            r#"
+            [agent]
+            node_id = "hk-01"
+            node_label = "Hong Kong 01"
+            server = "ws://127.0.0.1:8080/ws"
+            token = "token"
+            tags = [{tags}]
+            "#
+        );
+
+        let error = parse_agent_config(&input).expect_err("too many tags should fail");
+        assert!(error.to_string().contains("agent.tags"));
+    }
+
+    #[test]
+    fn rejects_agent_config_with_oversized_tag() {
+        let oversized = "x".repeat(MAX_NODE_TAG_BYTES + 1);
+        let input = format!(
+            r#"
+            [agent]
+            node_id = "hk-01"
+            node_label = "Hong Kong 01"
+            server = "ws://127.0.0.1:8080/ws"
+            token = "token"
+            tags = ["{oversized}"]
+            "#
+        );
+
+        let error = parse_agent_config(&input).expect_err("oversized tag should fail");
+        assert!(error.to_string().contains("agent.tags[0]"));
     }
 
     #[test]

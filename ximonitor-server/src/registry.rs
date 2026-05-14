@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use tokio::fs;
 use tokio::sync::RwLock;
 use url::Url;
-use ximonitor_proto::NodeIdentity;
+use ximonitor_proto::{MAX_NODE_TAG_BYTES, MAX_NODE_TAGS, NodeIdentity};
 
 use crate::fs_security::{create_private_dir_all, ensure_directory_mode};
 
@@ -244,6 +244,8 @@ pub async fn issue_node(path: &Path, request: IssueNodeRequest) -> Result<IssueN
     if let Some(node_label) = request.node_label.as_deref() {
         validate_non_empty("node_label", node_label)?;
     }
+    let normalized_tags = normalize_string_list(request.tags.clone());
+    validate_tag_list("tags", &normalized_tags)?;
 
     let request = request.clone();
     let (result, _) = mutate_registry_file(path, move |file| {
@@ -260,7 +262,7 @@ pub async fn issue_node(path: &Path, request: IssueNodeRequest) -> Result<IssueN
                 file.nodes[index].node_label = node_label.trim().to_string();
             }
             if !request.tags.is_empty() {
-                file.nodes[index].tags = normalize_string_list(request.tags.clone());
+                file.nodes[index].tags = normalized_tags.clone();
             }
             if request.rotate_token {
                 file.nodes[index].token = generate_token()?;
@@ -294,7 +296,7 @@ pub async fn issue_node(path: &Path, request: IssueNodeRequest) -> Result<IssueN
                 .unwrap_or(request.node_id.as_str())
                 .to_string(),
             token: generate_token()?,
-            tags: normalize_string_list(request.tags.clone()),
+            tags: normalized_tags.clone(),
             created_at: now,
             token_expires_at: Some(now + ChronoDuration::days(DEFAULT_TOKEN_VALIDITY_DAYS)),
         };
@@ -726,6 +728,7 @@ fn validate_registered_node(node: &RegisteredNode) -> Result<()> {
     validate_identifier("node.node_id", &node.node_id)?;
     validate_non_empty("node.node_label", &node.node_label)?;
     validate_non_empty("node.token", &node.token)?;
+    validate_tag_list("node.tags", &node.tags)?;
     Ok(())
 }
 
@@ -829,6 +832,7 @@ fn validate_runtime_identity(identity: &NodeIdentity) -> Result<()> {
     validate_non_empty("identity.agent_version", &identity.agent_version)?;
     validate_non_empty("identity.hostname", &identity.hostname)?;
     validate_non_empty("identity.os", &identity.os)?;
+    validate_tag_list("identity.tags", &identity.tags)?;
     Ok(())
 }
 
@@ -864,6 +868,18 @@ fn normalize_string_list(values: Vec<String>) -> Vec<String> {
     values
 }
 
+fn validate_tag_list(field: &str, values: &[String]) -> Result<()> {
+    if values.len() > MAX_NODE_TAGS {
+        bail!("{field} must contain at most {MAX_NODE_TAGS} tags");
+    }
+    for (index, value) in values.iter().enumerate() {
+        if value.len() > MAX_NODE_TAG_BYTES {
+            bail!("{field}[{index}] must be <= {MAX_NODE_TAG_BYTES} bytes");
+        }
+    }
+    Ok(())
+}
+
 /// 生成 256-bit 的随机 token 并以十六进制字符串形式返回。
 fn generate_token() -> Result<String> {
     let mut bytes = [0_u8; 32];
@@ -897,9 +913,9 @@ mod tests {
     use tokio::runtime::Runtime;
 
     use super::{
-        IssueNodeRequest, NodeRegistry, RegisteredNode, RegistryFile, build_agent_server_url,
-        build_github_release_base_url, default_agent_release_base_url, issue_node,
-        render_install_command,
+        IssueNodeRequest, MAX_NODE_TAG_BYTES, NodeRegistry, RegisteredNode, RegistryFile,
+        build_agent_server_url, build_github_release_base_url, default_agent_release_base_url,
+        issue_node, render_install_command, validate_registered_node,
     };
     use ximonitor_proto::NodeIdentity;
 
@@ -1273,6 +1289,49 @@ mod tests {
             release_url,
             "https://github.com/XiNian-dada/XiMonitor/releases/latest/download"
         );
+    }
+
+    #[test]
+    fn validate_registered_node_rejects_oversized_tags() {
+        let mut node = RegisteredNode {
+            node_id: "hk-01".to_string(),
+            node_label: "Hong Kong 01".to_string(),
+            token: "secret-token".to_string(),
+            tags: vec!["edge".to_string()],
+            created_at: Utc::now(),
+            token_expires_at: None,
+        };
+        node.tags = vec!["x".repeat(MAX_NODE_TAG_BYTES + 1)];
+
+        let error = validate_registered_node(&node).expect_err("oversized tag should fail");
+        assert!(error.to_string().contains("node.tags[0]"));
+    }
+
+    #[tokio::test]
+    async fn issue_node_rejects_excessive_tags() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let temp_dir =
+            std::env::temp_dir().join(format!("ximonitor-registry-tag-limit-test-{unique}"));
+        std::fs::create_dir_all(&temp_dir).expect("temp dir");
+        let path = temp_dir.join("server.json");
+
+        let error = issue_node(
+            &path,
+            IssueNodeRequest {
+                node_id: "hk-01".to_string(),
+                node_label: Some("Hong Kong 01".to_string()),
+                tags: (0..1000).map(|index| format!("tag-{index}")).collect(),
+                rotate_token: false,
+            },
+        )
+        .await
+        .expect_err("too many tags should fail");
+
+        assert!(error.to_string().contains("tags"));
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 
     #[tokio::test]

@@ -11,8 +11,9 @@ pub mod model;
 pub use config::{
     AgentConfig, ConfigError, DEFAULT_HISTORY_RETENTION_HOURS, DEFAULT_HISTORY_WRITE_INTERVAL_SECS,
     DEFAULT_MAX_MESSAGE_BYTES, DEFAULT_PING_INTERVAL_SECS, DEFAULT_REFRESH_INTERVAL_SECS,
-    DEFAULT_REPORT_INTERVAL_SECS, DEFAULT_STALE_AFTER_SECS, ReadonlyAuthConfig, ServerConfig,
-    WsConfig, normalize_totp_secret, parse_agent_config, parse_server_config,
+    DEFAULT_REPORT_INTERVAL_SECS, DEFAULT_STALE_AFTER_SECS, MAX_NODE_TAG_BYTES, MAX_NODE_TAGS,
+    ReadonlyAuthConfig, ServerConfig, WsConfig, normalize_totp_secret, parse_agent_config,
+    parse_server_config,
 };
 pub use message::{
     HelloMessage, MetricsMessage, NoticeLevel, PingMessage, PongMessage,
