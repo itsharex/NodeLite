@@ -550,13 +550,15 @@ fn save_registry_file_sync(path: &Path, file: &RegistryFile) -> Result<()> {
     let tmp_path = temporary_registry_path(path)?;
     write_registry_payload(&tmp_path, &payload)
         .with_context(|| format!("failed to write {}", tmp_path.display()))?;
+    harden_registry_permissions(&tmp_path)
+        .with_context(|| format!("failed to set permissions on {}", tmp_path.display()))?;
     std::fs::rename(&tmp_path, path)
         .with_context(|| format!("failed to replace {}", path.display()))?;
     // rename 之后再 fsync 父目录,保证目录项变更也落盘,与 write_registry_payload 内部的
     // fsync 配合,使 crash 后要么看到旧文件、要么看到完整新文件,不会出现空文件。
     sync_parent_dir(path);
-    harden_registry_permissions(path)
-        .with_context(|| format!("failed to set permissions on {}", path.display()))?;
+    verify_registry_permissions(path)
+        .with_context(|| format!("insecure permissions after replacing {}", path.display()))?;
     Ok(())
 }
 
@@ -696,6 +698,27 @@ fn harden_registry_permissions(path: &Path) -> Result<()> {
     {
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
             .with_context(|| format!("failed to chmod {}", path.display()))?;
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
+
+    Ok(())
+}
+
+fn verify_registry_permissions(path: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        let mode = std::fs::metadata(path)
+            .with_context(|| format!("failed to stat {}", path.display()))?
+            .permissions()
+            .mode()
+            & 0o777;
+        if mode != 0o600 {
+            bail!("{} must be mode 0600, got {mode:o}", path.display());
+        }
     }
 
     #[cfg(not(unix))]
