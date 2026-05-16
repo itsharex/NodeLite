@@ -1854,9 +1854,19 @@
         const rect = root.getBoundingClientRect();
         const measuredWidth = Math.round(rect.width || root.clientWidth || 0);
         const measuredHeight = Math.round(rect.height || root.clientHeight || 0);
+        const optionHeight = Number(options.height);
+        const cssMinHeight = Number.parseFloat(window.getComputedStyle(root).minHeight);
+        const fallbackHeight = Math.max(
+          Number.isFinite(optionHeight) && optionHeight > 0 ? optionHeight : 180,
+          Number.isFinite(cssMinHeight) ? cssMinHeight : 0,
+        );
+        // During first paint, flex/grid children can briefly report a tiny height.
+        // Using that transient value creates a short SVG viewBox that looks vertically squashed.
+        const minUsableHeight = Math.min(fallbackHeight, Math.max(80, fallbackHeight * 0.75));
+        const stableHeight = measuredHeight >= minUsableHeight ? measuredHeight : fallbackHeight;
         return {
           width: Math.max(280, Math.round(measuredWidth || options.width || 600)),
-          height: Math.max(64, Math.round(measuredHeight || options.height || 180)),
+          height: Math.max(64, Math.round(stableHeight)),
         };
       }
       function chartPadLeft(kind) {
