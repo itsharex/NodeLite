@@ -280,6 +280,10 @@ async fn handle_socket(
                                 break Err(ProtocolError::Client("agent must not send server_notice messages".to_string()));
                             }
                             WireMessage::RefreshTokenRequest(request) => {
+                                if !state.registry.is_token_current(&node_id, &session_token).await {
+                                    warn!(node_id = %node_id, "disconnecting session after token expiry before refresh");
+                                    break Ok(());
+                                }
                                 // `request.node_id` 完全由客户端控制,我们不应该
                                 // 信任它来决定"为谁刷 token"。会话握手期间的认证
                                 // 已经把这条连接绑定到 `node_id`,接下来所有的

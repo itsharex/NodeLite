@@ -805,10 +805,7 @@ fn authorize_identity(
             bail!("unauthorized");
         }
 
-        // 检查 token 是否过期
-        if let Some(expires_at) = entry.token_expires_at
-            && Utc::now() >= expires_at
-        {
+        if !token_is_unexpired(entry, Utc::now()) {
             bail!("token expired");
         }
 
@@ -824,10 +821,16 @@ fn authorize_identity(
 
 fn is_token_current(entries: &HashMap<String, RegisteredNode>, node_id: &str, token: &str) -> bool {
     if let Some(entry) = entries.get(node_id) {
-        return constant_time_eq(token, &entry.token);
+        return constant_time_eq(token, &entry.token) && token_is_unexpired(entry, Utc::now());
     }
 
     false
+}
+
+fn token_is_unexpired(entry: &RegisteredNode, now: DateTime<Utc>) -> bool {
+    entry
+        .token_expires_at
+        .is_none_or(|expires_at| now < expires_at)
 }
 
 /// 常量时间字符串比较,用于 token 校验,避免基于响应耗时的旁路攻击。
@@ -920,7 +923,7 @@ fn toml_escape(value: &str) -> String {
 mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use chrono::Utc;
+    use chrono::{Duration as ChronoDuration, Utc};
     use tokio::runtime::Runtime;
 
     use super::{
@@ -1133,6 +1136,42 @@ mod tests {
                     .expect("second install token lookup should succeed")
                     .is_none()
             );
+
+            let _ = std::fs::remove_file(&path);
+            let _ = std::fs::remove_dir(&temp_dir);
+        });
+    }
+
+    #[test]
+    fn expired_tokens_are_not_current_after_handshake() {
+        let runtime = Runtime::new().expect("runtime should build");
+        runtime.block_on(async {
+            let unique = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock should be monotonic enough")
+                .as_nanos();
+            let temp_dir =
+                std::env::temp_dir().join(format!("ximonitor-expired-token-test-{unique}"));
+            std::fs::create_dir_all(&temp_dir).expect("temp dir should exist");
+            let path = temp_dir.join("server.json");
+            let file = RegistryFile {
+                nodes: vec![RegisteredNode {
+                    node_id: "expired-01".to_string(),
+                    node_label: "Expired 01".to_string(),
+                    token: "secret".to_string(),
+                    tags: vec![],
+                    created_at: Utc::now(),
+                    token_expires_at: Some(Utc::now() - ChronoDuration::seconds(1)),
+                }],
+                install_sessions: Vec::new(),
+            };
+            std::fs::write(&path, serde_json::to_string_pretty(&file).expect("json"))
+                .expect("registry should be written");
+            let registry = NodeRegistry::load(&path)
+                .await
+                .expect("registry should load");
+
+            assert!(!registry.is_token_current("expired-01", "secret").await);
 
             let _ = std::fs::remove_file(&path);
             let _ = std::fs::remove_dir(&temp_dir);
