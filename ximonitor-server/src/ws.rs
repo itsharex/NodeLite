@@ -25,7 +25,7 @@ use tokio::sync::mpsc;
 use tokio::time::{MissedTickBehavior, interval};
 use tracing::{error, info, warn};
 use ximonitor_proto::{
-    HelloMessage, MetricsMessage, PingMessage, PongMessage, ServerNoticeMessage, WireMessage,
+    HelloMessage, MetricsMessage, PongMessage, ServerNoticeMessage, WireMessage,
 };
 
 use crate::AppState;
@@ -379,8 +379,7 @@ async fn handle_socket(
                     let nonce = next_ping_nonce;
                     next_ping_nonce = next_ping_nonce.saturating_add(1);
                     outstanding_pings.insert(nonce, Instant::now());
-                    let ping = serde_json::to_string(&WireMessage::Ping(PingMessage { nonce }))
-                        .map_err(|error| anyhow!("failed to serialize ping: {error}"))?;
+                    let ping = encode_ping_message(nonce);
                     sender
                         .send(Message::Text(ping.into()))
                         .await
@@ -517,5 +516,21 @@ fn prune_outstanding_pings(outstanding_pings: &mut HashMap<u64, Instant>, max_ag
         .map(|(nonce, _)| *nonce)
     {
         outstanding_pings.remove(&oldest_nonce);
+    }
+}
+
+/// Ping 是高频热路径,协议结构又极其固定,这里直接拼接 JSON 文本以避免
+/// 每个心跳都走一次 `serde_json::to_string`。
+fn encode_ping_message(nonce: u64) -> String {
+    format!(r#"{{"type":"ping","nonce":{nonce}}}"#)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::encode_ping_message;
+
+    #[test]
+    fn encode_ping_message_matches_wire_protocol_shape() {
+        assert_eq!(encode_ping_message(42), r#"{"type":"ping","nonce":42}"#);
     }
 }
