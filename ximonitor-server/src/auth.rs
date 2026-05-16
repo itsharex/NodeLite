@@ -22,7 +22,7 @@ use getrandom::fill as fill_random;
 use serde::{Deserialize, Serialize};
 use subtle::ConstantTimeEq;
 use totp_lite::{Sha1, totp_custom};
-use tracing::warn;
+use tracing::error;
 use ximonitor_proto::{ReadonlyAuthConfig, ServerConfig, normalize_totp_secret};
 
 /// Basic Auth 通过后等待输入 TOTP 的窗口。
@@ -241,7 +241,7 @@ fn prune_expired_sessions(store: &mut TwoFactorSessionStore, now: Instant) {
 
 fn lock_mutex<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|poisoned| {
-        warn!("mutex poisoned; recovering with stale state");
+        error!("mutex poisoned; recovering with stale state");
         poisoned.into_inner()
     })
 }

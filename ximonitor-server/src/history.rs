@@ -17,7 +17,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, TimeZone, Utc};
 use rusqlite::{Connection, params};
 use tokio::sync::Mutex;
-use tracing::warn;
+use tracing::{error, warn};
 use ximonitor_proto::{
     DEFAULT_HISTORY_RETENTION_HOURS, DEFAULT_HISTORY_WRITE_INTERVAL_SECS, HistoryPoint, NodeStatus,
     percentage,
@@ -76,10 +76,13 @@ impl HistoryStore {
                 self.available.store(true, Ordering::Relaxed);
             }
             Ok(Err(error)) => {
-                warn!(error = ?error, "history database unavailable; real-time views will continue");
+                error!(
+                    error = ?error,
+                    "history database unavailable; real-time views will continue"
+                );
             }
             Err(error) => {
-                warn!(error = ?error, "history database initialization join failed");
+                error!(error = ?error, "history database initialization join failed");
             }
         }
     }
