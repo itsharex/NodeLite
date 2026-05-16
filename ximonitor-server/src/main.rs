@@ -1573,11 +1573,14 @@ mod tests {
     fn install_token_format_short_circuits_obvious_garbage() {
         // 32-byte hex token = 64 lowercase hex chars 才是合法格式;
         // 任何不符合的输入应在落到 registry flock 之前就被拒掉。
-        let valid = "a".repeat(64);
+        let valid = "0123456789abcdef".repeat(4);
         assert!(is_well_formed_install_token(&valid));
         assert!(!is_well_formed_install_token(""));
         assert!(!is_well_formed_install_token(&"a".repeat(63)));
         assert!(!is_well_formed_install_token(&"a".repeat(65)));
+        // 格式正确但低熵的 token 不进入 registry 文件锁路径。
+        assert!(!is_well_formed_install_token(&"a".repeat(64)));
+        assert!(!is_well_formed_install_token(&"abab".repeat(16)));
         // 大写不被接受 —— 与 generate_token 的 lowercase hex 输出对齐。
         assert!(!is_well_formed_install_token(&"A".repeat(64)));
         // 非 hex 字符

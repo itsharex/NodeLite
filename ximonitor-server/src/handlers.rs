@@ -1444,14 +1444,34 @@ fn install_blocked_response(retry_after_secs: u64) -> Response {
         .into_response()
 }
 
+const INSTALL_TOKEN_HEX_LEN: usize = 64;
+const INSTALL_TOKEN_MIN_UNIQUE_NIBBLES: u32 = 10;
+
 /// install token 在 [registry.rs](../registry.rs) 中由 `generate_token` 生成,
-/// 固定为 32 字节随机数的 lowercase hex —— 即 64 字符 0-9a-f。这里的格式检查
-/// 让显然不合法的输入在落到文件锁前就被拒掉。
+/// 固定为 32 字节随机数的 lowercase hex。这里的廉价检查会在文件锁前拒绝
+/// 明显无效或低熵的输入。
 pub(crate) fn is_well_formed_install_token(token: &str) -> bool {
-    token.len() == 64
-        && token
-            .bytes()
-            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+    if token.len() != INSTALL_TOKEN_HEX_LEN {
+        return false;
+    }
+
+    let mut seen_nibbles = 0_u16;
+    for byte in token.bytes() {
+        let Some(nibble) = lowercase_hex_nibble(byte) else {
+            return false;
+        };
+        seen_nibbles |= 1 << nibble;
+    }
+
+    seen_nibbles.count_ones() >= INSTALL_TOKEN_MIN_UNIQUE_NIBBLES
+}
+
+fn lowercase_hex_nibble(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        _ => None,
+    }
 }
 
 /// 仪表盘顶部的总览数据。
