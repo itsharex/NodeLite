@@ -1,8 +1,8 @@
 use std::path::{Path, PathBuf};
 
+use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::Json;
 use getrandom::fill as fill_random;
 use nodelite_proto::{ReadonlyAuthConfig, parse_server_config};
 use tokio::fs;

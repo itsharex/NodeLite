@@ -15,8 +15,12 @@ async fn multiple_nodes_can_connect_and_report_together() -> Result<()> {
         );
     }
 
-    let mut agents = try_join_all(issued_nodes.iter().map(|node| TestAgent::connect(&server, node)))
-        .await?;
+    let mut agents = try_join_all(
+        issued_nodes
+            .iter()
+            .map(|node| TestAgent::connect(&server, node)),
+    )
+    .await?;
     for (index, agent) in agents.iter_mut().enumerate() {
         agent.send_fake_metrics(index as u64 + 1).await?;
     }

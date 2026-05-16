@@ -1,10 +1,10 @@
 use std::process::Stdio;
 use std::time::Duration;
 
+use axum::Json;
 use axum::extract::{Path as AxumPath, Query, State};
 use axum::http::StatusCode;
 use axum::response::{AppendHeaders, IntoResponse, Response};
-use axum::Json;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncSeekExt, SeekFrom};
@@ -23,12 +23,11 @@ use nodelite_proto::{DEFAULT_HISTORY_RETENTION_HOURS, ReadonlyAuthConfig};
 
 const MAX_UPDATE_LOG_CHUNK_BYTES: u64 = 128 * 1024;
 
-#[path = "helpers.rs"]
 mod helpers;
 use helpers::{
     generate_totp_secret, otpauth_uri, persist_auth_2fa_change, persist_auth_password_change,
-    server_build_version, server_update_log_path, server_update_shell_command,
-    settings_json_error, validate_password_for_settings,
+    server_build_version, server_update_log_path, server_update_shell_command, settings_json_error,
+    validate_password_for_settings,
 };
 
 /// 设置页读取的服务端与安全状态。这里刻意不包含任何 token / password 明文。

@@ -26,17 +26,15 @@ use crate::ServerReadiness;
 use crate::admission::{InstallAdmissionConfig, InstallAdmissionController, WsAdmissionController};
 use crate::agent_logs::AgentLogStore;
 use crate::auth::{ReadonlyRouteAuth, TwoFactorSessions};
-use crate::handlers::{
-    node_history, node_status, nodes, overview, require_readonly_auth,
-};
+use crate::handlers::{node_history, node_status, nodes, overview, require_readonly_auth};
 use crate::history::HistoryStore;
 use crate::registry::{IssueNodeRequest, NodeRegistry, issue_node};
 use crate::set_protected_response_headers;
 use crate::state::SharedState;
 use crate::ws::ws_handler;
 use nodelite_proto::{
-    DiskUsage, HelloMessage, HistoryPoint, LoadAverage, MemoryUsage, NetworkCounters,
-    NodeIdentity, NodeSnapshot, NodeStatus, NoticeLevel, OverviewData, ReadonlyAuthConfig,
+    DiskUsage, HelloMessage, HistoryPoint, LoadAverage, MemoryUsage, NetworkCounters, NodeIdentity,
+    NodeSnapshot, NodeStatus, NoticeLevel, OverviewData, ReadonlyAuthConfig,
     RefreshTokenResponseMessage, ServerConfig, WireMessage, WsConfig,
 };
 
@@ -213,7 +211,11 @@ impl TestServer {
         self.fetch_json(&format!("/api/nodes/{node_id}")).await
     }
 
-    pub async fn node_history(&self, node_id: &str, max_points: usize) -> Result<Vec<HistoryPoint>> {
+    pub async fn node_history(
+        &self,
+        node_id: &str,
+        max_points: usize,
+    ) -> Result<Vec<HistoryPoint>> {
         self.fetch_json(&format!(
             "/api/nodes/{node_id}/history?window_hours=24&max_points={max_points}"
         ))
@@ -226,13 +228,17 @@ impl TestServer {
         expected_uptime: u64,
         timeout_duration: Duration,
     ) -> Result<NodeStatus> {
-        self.wait_for_status(timeout_duration, |status| {
-            status.online
-                && status
-                    .snapshot
-                    .as_ref()
-                    .is_some_and(|snapshot| snapshot.uptime_secs == expected_uptime)
-        }, node_id)
+        self.wait_for_status(
+            timeout_duration,
+            |status| {
+                status.online
+                    && status
+                        .snapshot
+                        .as_ref()
+                        .is_some_and(|snapshot| snapshot.uptime_secs == expected_uptime)
+            },
+            node_id,
+        )
         .await
     }
 
@@ -353,9 +359,10 @@ impl TestAgent {
     }
 
     pub async fn send_snapshot(&mut self, snapshot: NodeSnapshot) -> Result<()> {
-        send_wire_message(&mut self.socket, &WireMessage::Metrics(nodelite_proto::MetricsMessage {
-            snapshot,
-        }))
+        send_wire_message(
+            &mut self.socket,
+            &WireMessage::Metrics(nodelite_proto::MetricsMessage { snapshot }),
+        )
         .await
     }
 
@@ -528,9 +535,7 @@ async fn wait_for_authenticated_notice(socket: &mut TestSocket, node_id: &str) -
                             )
                             .await?;
                         }
-                        WireMessage::ServerNotice(notice)
-                            if notice.level == NoticeLevel::Error =>
-                        {
+                        WireMessage::ServerNotice(notice) if notice.level == NoticeLevel::Error => {
                             bail!("server rejected {node_id}: {}", notice.message);
                         }
                         _ => {}

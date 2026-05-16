@@ -3,7 +3,9 @@ use super::*;
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn authenticates_agent_and_exposes_node_over_http() -> Result<()> {
     let server = TestServer::start().await?;
-    let node = server.issue_node("itest-handshake-01", "Integration Handshake 01").await?;
+    let node = server
+        .issue_node("itest-handshake-01", "Integration Handshake 01")
+        .await?;
 
     let mut agent = TestAgent::connect(&server, &node).await?;
     agent.send_fake_metrics(1).await?;

@@ -3,7 +3,9 @@ use super::*;
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn metrics_flow_reaches_status_and_history_endpoints() -> Result<()> {
     let server = TestServer::start().await?;
-    let node = server.issue_node("itest-metrics-01", "Integration Metrics 01").await?;
+    let node = server
+        .issue_node("itest-metrics-01", "Integration Metrics 01")
+        .await?;
     let mut agent = TestAgent::connect(&server, &node).await?;
 
     agent.send_fake_metrics(7).await?;
@@ -12,7 +14,10 @@ async fn metrics_flow_reaches_status_and_history_endpoints() -> Result<()> {
         .wait_for_node_uptime(&node.node_id, 7, TEST_TIMEOUT)
         .await?;
     assert_eq!(
-        status.snapshot.as_ref().map(|snapshot| snapshot.uptime_secs),
+        status
+            .snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.uptime_secs),
         Some(7),
     );
 

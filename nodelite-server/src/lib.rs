@@ -20,19 +20,19 @@ mod fs_security;
 mod handlers;
 mod history;
 #[cfg(test)]
+#[path = "../tests/integration/mod.rs"]
+mod integration_tests;
+#[cfg(test)]
 mod load_test;
 mod qr;
 mod registry;
 mod sanitize;
 mod snapshot;
 mod state;
-mod ui;
-mod ws;
 #[cfg(test)]
 mod test_support;
-#[cfg(test)]
-#[path = "../tests/integration/mod.rs"]
-mod integration_tests;
+mod ui;
+mod ws;
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
