@@ -43,6 +43,8 @@ pub struct HistoryStore {
     last_written_at: Arc<Mutex<HashMap<String, DateTime<Utc>>>>,
     /// 最近一次执行清理删除的时间,用于避免每次写入都触发删除。
     last_pruned_at: Arc<Mutex<Option<DateTime<Utc>>>>,
+    /// WAL/SHM 文件通常在第一次真实写入后才出现,此标志确保后续权限加固只做一次。
+    artifacts_hardened_after_write: Arc<AtomicBool>,
     /// 写入互斥:多个节点的写入串行化,简化 SQLite 端的锁竞争。
     write_gate: Arc<Mutex<()>>,
 }
@@ -55,6 +57,7 @@ impl HistoryStore {
             connection: Arc::new(Mutex::new(None)),
             last_written_at: Arc::new(Mutex::new(HashMap::new())),
             last_pruned_at: Arc::new(Mutex::new(None)),
+            artifacts_hardened_after_write: Arc::new(AtomicBool::new(false)),
             write_gate: Arc::new(Mutex::new(())),
         }
     }
@@ -117,13 +120,20 @@ impl HistoryStore {
         let prune_before = self.maybe_schedule_prune().await;
         let db_path = Arc::clone(&self.db_path);
         let connection_arc = Arc::clone(&self.connection);
+        let artifacts_hardened_after_write = Arc::clone(&self.artifacts_hardened_after_write);
         let point_for_task = point.clone();
         let result = tokio::task::spawn_blocking(move || {
             let guard = connection_arc.blocking_lock();
             let Some(ref connection) = *guard else {
                 anyhow::bail!("history connection not initialized");
             };
-            write_history_point(db_path.as_ref(), connection, &point_for_task, prune_before)
+            write_history_point(
+                db_path.as_ref(),
+                connection,
+                &point_for_task,
+                prune_before,
+                artifacts_hardened_after_write.as_ref(),
+            )
         })
         .await;
 
@@ -280,6 +290,7 @@ fn write_history_point(
     connection: &Connection,
     point: &HistoryPoint,
     prune_before: Option<DateTime<Utc>>,
+    artifacts_hardened_after_write: &AtomicBool,
 ) -> Result<()> {
     connection.execute(
         r#"
@@ -312,7 +323,10 @@ fn write_history_point(
             params![cutoff.timestamp()],
         )?;
     }
-    harden_database_artifacts(db_path)?;
+    if !artifacts_hardened_after_write.load(Ordering::Relaxed) {
+        harden_database_artifacts(db_path)?;
+        artifacts_hardened_after_write.store(true, Ordering::Relaxed);
+    }
 
     Ok(())
 }
@@ -533,6 +547,7 @@ fn average_optional_u64(values: impl Iterator<Item = Option<u64>>) -> Option<u64
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
+    use std::sync::atomic::AtomicBool;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use chrono::{Duration, Utc};
@@ -623,6 +638,7 @@ mod tests {
                     disk_used_percent: Some(6.0),
                 },
                 None,
+                &AtomicBool::new(false),
             )
             .expect("history point should persist");
 
