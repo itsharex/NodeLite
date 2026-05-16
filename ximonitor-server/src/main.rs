@@ -15,6 +15,7 @@ mod admission;
 mod agent_logs;
 mod auth;
 mod cli;
+mod encoding;
 mod fs_security;
 mod handlers;
 mod history;

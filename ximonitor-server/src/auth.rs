@@ -25,6 +25,8 @@ use totp_lite::{Sha1, totp_custom};
 use tracing::error;
 use ximonitor_proto::{ReadonlyAuthConfig, ServerConfig, normalize_totp_secret};
 
+use crate::encoding::hex_encode;
+
 /// Basic Auth 通过后等待输入 TOTP 的窗口。
 pub const TWO_FACTOR_PENDING_SECS: u64 = 300;
 /// 2FA 完成后的浏览器会话有效期。
@@ -250,16 +252,6 @@ fn generate_session_token() -> Result<String> {
     let mut bytes = [0_u8; 32];
     fill_random(&mut bytes).context("failed to gather secure random bytes")?;
     Ok(hex_encode(&bytes))
-}
-
-fn hex_encode(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut output = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        output.push(HEX[(byte >> 4) as usize] as char);
-        output.push(HEX[(byte & 0x0f) as usize] as char);
-    }
-    output
 }
 
 pub fn decode_totp_secret(value: &str) -> Option<Vec<u8>> {

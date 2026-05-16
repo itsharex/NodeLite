@@ -25,6 +25,7 @@ use url::Url;
 use ximonitor_proto::{MAX_NODE_TAG_BYTES, MAX_NODE_TAGS, NodeIdentity};
 
 use crate::auth::constant_time_compare_bytes;
+use crate::encoding::hex_encode;
 use crate::fs_security::{create_private_dir_all, ensure_directory_mode};
 
 #[cfg(unix)]
@@ -882,16 +883,6 @@ fn generate_token() -> Result<String> {
     let mut bytes = [0_u8; 32];
     fill_random(&mut bytes).context("failed to gather secure random bytes")?;
     Ok(hex_encode(&bytes))
-}
-
-fn hex_encode(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut output = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        output.push(HEX[(byte >> 4) as usize] as char);
-        output.push(HEX[(byte & 0x0f) as usize] as char);
-    }
-    output
 }
 
 fn shell_quote(value: &str) -> String {
