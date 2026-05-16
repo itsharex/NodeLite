@@ -736,7 +736,9 @@ mod tests {
     fn totp_step_marked_used_blocks_replay() {
         let sessions = TwoFactorSessions::new();
         let step = 12345_u64;
-        assert!(crate::auth::TWO_FACTOR_TOTP_REPLAY_RETENTION_SECS >= 150);
+        let replay_retention =
+            std::time::Duration::from_secs(crate::auth::TWO_FACTOR_TOTP_REPLAY_RETENTION_SECS);
+        assert!(replay_retention >= std::time::Duration::from_secs(150));
         assert!(!sessions.is_totp_step_used(step));
         sessions.mark_totp_step_used(step);
         assert!(sessions.is_totp_step_used(step));
