@@ -23,7 +23,7 @@ use nodelite_proto::{ReadonlyAuthConfig, ServerConfig, normalize_totp_secret};
 use serde::{Deserialize, Serialize};
 use subtle::ConstantTimeEq;
 use totp_lite::{Sha1, totp_custom};
-use tracing::error;
+use tracing::warn;
 
 use crate::encoding::hex_encode;
 
@@ -242,9 +242,9 @@ fn prune_expired_sessions(store: &mut TwoFactorSessionStore, now: Instant) {
 
 fn lock_mutex(mutex: &Mutex<TwoFactorSessionStore>) -> MutexGuard<'_, TwoFactorSessionStore> {
     mutex.lock().unwrap_or_else(|poisoned| {
-        error!("two-factor session mutex poisoned; resetting session state");
+        warn!("two-factor session mutex poisoned; preserving valid session state");
         let mut guard = poisoned.into_inner();
-        *guard = TwoFactorSessionStore::default();
+        prune_expired_sessions(&mut guard, Instant::now());
         mutex.clear_poison();
         guard
     })
@@ -389,7 +389,7 @@ mod tests {
     }
 
     #[test]
-    fn two_factor_sessions_reset_after_mutex_poison() {
+    fn two_factor_sessions_preserve_valid_entries_after_mutex_poison() {
         let sessions = TwoFactorSessions::new();
         let pending = sessions.create_pending().expect("create pending session");
         assert!(sessions.pending_exists(&pending));
@@ -399,7 +399,7 @@ mod tests {
             panic!("poison two-factor session store");
         }));
 
-        assert!(!sessions.pending_exists(&pending));
+        assert!(sessions.pending_exists(&pending));
         let replacement = sessions
             .create_pending()
             .expect("create replacement session");
