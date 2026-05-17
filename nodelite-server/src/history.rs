@@ -32,6 +32,22 @@ use std::os::unix::fs::PermissionsExt;
 const SQLITE_BUSY_TIMEOUT_SECS: u64 = 5;
 const SQLITE_BUSY_MAX_RETRIES: u32 = 3;
 const SQLITE_BUSY_RETRY_BASE_MS: u64 = 50;
+const HISTORY_QUERY_SQL: &str = r#"
+        SELECT
+            ?1 AS node_id,
+            MAX(recorded_at) AS recorded_at,
+            AVG(cpu_usage_percent) AS cpu_usage_percent,
+            AVG(memory_used_percent) AS memory_used_percent,
+            AVG(rx_bytes_per_sec) AS rx_bytes_per_sec,
+            AVG(tx_bytes_per_sec) AS tx_bytes_per_sec,
+            AVG(latency_ms) AS latency_ms,
+            AVG(disk_used_percent) AS disk_used_percent
+        FROM history_points INDEXED BY idx_history_points_covering_metrics
+        WHERE node_id = ?1 AND recorded_at >= ?2 AND recorded_at <= ?3
+        GROUP BY ((recorded_at - ?2) / ?4)
+        ORDER BY recorded_at ASC
+        LIMIT ?5
+        "#;
 
 /// 对外暴露的历史存储句柄,可被低成本克隆给多个异步任务。
 #[derive(Clone)]
@@ -282,6 +298,17 @@ fn initialize_database(db_path: &PathBuf) -> Result<Connection> {
         );
         CREATE INDEX IF NOT EXISTS idx_history_points_node_time
             ON history_points (node_id, recorded_at);
+        CREATE INDEX IF NOT EXISTS idx_history_points_covering_metrics
+            ON history_points (
+                node_id,
+                recorded_at,
+                cpu_usage_percent,
+                memory_used_percent,
+                rx_bytes_per_sec,
+                tx_bytes_per_sec,
+                latency_ms,
+                disk_used_percent
+            );
         "#,
     )?;
     harden_database_artifacts(db_path)?;
@@ -360,24 +387,7 @@ fn query_history_between(
     let max_points = max_points.max(1);
     let span_seconds = (until.timestamp() - since.timestamp()).max(1);
     let bucket_seconds = ((span_seconds as usize).div_ceil(max_points)).max(1) as i64;
-    let mut statement = connection.prepare(
-        r#"
-        SELECT
-            ?1 AS node_id,
-            MAX(recorded_at) AS recorded_at,
-            AVG(cpu_usage_percent) AS cpu_usage_percent,
-            AVG(memory_used_percent) AS memory_used_percent,
-            AVG(rx_bytes_per_sec) AS rx_bytes_per_sec,
-            AVG(tx_bytes_per_sec) AS tx_bytes_per_sec,
-            AVG(latency_ms) AS latency_ms,
-            AVG(disk_used_percent) AS disk_used_percent
-        FROM history_points
-        WHERE node_id = ?1 AND recorded_at >= ?2 AND recorded_at <= ?3
-        GROUP BY ((recorded_at - ?2) / ?4)
-        ORDER BY recorded_at ASC
-        LIMIT ?5
-        "#,
-    )?;
+    let mut statement = connection.prepare(HISTORY_QUERY_SQL)?;
     let rows = statement.query_map(
         params![
             node_id,
@@ -534,8 +544,8 @@ mod tests {
     use tokio::runtime::Runtime;
 
     use super::{
-        HistoryStore, build_history_point, initialize_database, query_history_between,
-        write_history_point,
+        HISTORY_QUERY_SQL, HistoryStore, build_history_point, initialize_database,
+        query_history_between, write_history_point,
     };
 
     #[test]
@@ -705,6 +715,41 @@ mod tests {
                 .all(|pair| pair[0].recorded_at <= pair[1].recorded_at)
         );
 
+        let _ = std::fs::remove_file(&db_path);
+        let _ = std::fs::remove_dir(&temp_dir);
+    }
+
+    #[test]
+    fn query_history_between_uses_covering_index() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be monotonic enough")
+            .as_nanos();
+        let temp_dir = std::env::temp_dir().join(format!("nodelite-history-query-plan-{unique}"));
+        std::fs::create_dir_all(&temp_dir).expect("temp dir should exist");
+        let db_path = temp_dir.join("history.sqlite3");
+        let connection = initialize_database(&db_path).expect("database should initialize");
+        let explain_sql = format!("EXPLAIN QUERY PLAN {HISTORY_QUERY_SQL}");
+        let mut statement = connection
+            .prepare(&explain_sql)
+            .expect("query plan should prepare");
+        let details = statement
+            .query_map(
+                rusqlite::params!["hk-01", 0_i64, i64::MAX, 60_i64, 24_i64],
+                |row| row.get::<_, String>(3),
+            )
+            .expect("query plan should run")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("query plan rows should decode");
+        let plan = details.join("\n");
+
+        assert!(
+            plan.contains("USING COVERING INDEX idx_history_points_covering_metrics"),
+            "history query should use covering index, got:\n{plan}"
+        );
+
+        drop(statement);
+        drop(connection);
         let _ = std::fs::remove_file(&db_path);
         let _ = std::fs::remove_dir(&temp_dir);
     }
