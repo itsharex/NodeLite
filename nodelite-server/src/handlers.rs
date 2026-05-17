@@ -38,10 +38,8 @@ pub(crate) use settings::{
 
 /// 把 `scripts/install-agent.sh` 在编译期嵌入到二进制内。
 const INSTALL_AGENT_SCRIPT: &str = include_str!("../../scripts/install-agent.sh");
-const BRAND_LOGO_LIGHT_PNG: &[u8] =
-    include_bytes!("../../logo/file_00000000994c71fd8ad6e785ee49d090.png");
-const BRAND_LOGO_DARK_PNG: &[u8] =
-    include_bytes!("../../logo/file_00000000ebe071f599ec01a03b647bb3.png");
+const BRAND_LOGO_LIGHT_WEBP: &[u8] = include_bytes!("../../logo/brand-logo-light.webp");
+const BRAND_LOGO_DARK_WEBP: &[u8] = include_bytes!("../../logo/brand-logo-dark.webp");
 /// 历史接口默认查询窗口(小时)。
 const DEFAULT_HISTORY_WINDOW_HOURS: u64 = 24;
 /// 历史接口默认返回的样本点数。
@@ -105,11 +103,11 @@ pub(crate) async fn ui_i18n_asset() -> Response {
 }
 
 pub(crate) async fn brand_logo_light_asset() -> Response {
-    png_asset(BRAND_LOGO_LIGHT_PNG)
+    webp_asset(BRAND_LOGO_LIGHT_WEBP)
 }
 
 pub(crate) async fn brand_logo_dark_asset() -> Response {
-    png_asset(BRAND_LOGO_DARK_PNG)
+    webp_asset(BRAND_LOGO_DARK_WEBP)
 }
 
 /// 2FA 验证页面。
@@ -117,10 +115,10 @@ pub(crate) async fn verify_2fa_page() -> Html<&'static str> {
     Html(include_str!("../assets/verify-2fa.html"))
 }
 
-fn png_asset(bytes: &'static [u8]) -> Response {
+fn webp_asset(bytes: &'static [u8]) -> Response {
     (
         [
-            (header::CONTENT_TYPE, "image/png"),
+            (header::CONTENT_TYPE, "image/webp"),
             (header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
         ],
         bytes,
