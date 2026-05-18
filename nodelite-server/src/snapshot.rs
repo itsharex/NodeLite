@@ -11,7 +11,9 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use nodelite_proto::NodeStatus;
 use tokio::fs;
+use tokio::task::JoinHandle;
 use tokio::time::{MissedTickBehavior, interval};
+use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use crate::fs_security::{create_private_dir_all_async, ensure_directory_mode};
@@ -31,20 +33,28 @@ pub async fn load_snapshot(path: &Path) -> Result<Vec<NodeStatus>> {
 }
 
 /// 启动一个后台任务,每 15 秒把当前 `SharedState` 序列化到 `snapshot_path`。
-pub fn spawn_snapshot_persistor(shared: SharedState, snapshot_path: PathBuf) {
+pub fn spawn_snapshot_persistor(
+    shared: SharedState,
+    snapshot_path: PathBuf,
+    shutdown: CancellationToken,
+) -> JoinHandle<()> {
     let snapshot_path = Arc::new(snapshot_path);
     tokio::spawn(async move {
         let mut ticker = interval(Duration::from_secs(15));
         // 主机/进程被挂起恢复后,不要连续 burst 多次磁盘 IO;保持 15 s 节奏即可。
         ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
         loop {
-            ticker.tick().await;
-            let statuses = shared.list_statuses().await;
-            if let Err(error) = persist_snapshot(snapshot_path.as_ref(), &statuses).await {
-                warn!(error = ?error, path = %snapshot_path.display(), "failed to persist node snapshot");
+            tokio::select! {
+                _ = shutdown.cancelled() => break,
+                _ = ticker.tick() => {
+                    let statuses = shared.list_statuses().await;
+                    if let Err(error) = persist_snapshot(snapshot_path.as_ref(), &statuses).await {
+                        warn!(error = ?error, path = %snapshot_path.display(), "failed to persist node snapshot");
+                    }
+                }
             }
         }
-    });
+    })
 }
 
 /// 实际执行"写临时文件 → rename → 设权限"的步骤。
