@@ -9,4 +9,4 @@ target/tarpaulin/
 /docs
 SECURITY.md
 
-.claude/AGENTS.md
+.claude/
