@@ -90,7 +90,9 @@ impl ReadonlyRouteAuth {
             .headers()
             .get(header::AUTHORIZATION)
             .and_then(|value| value.to_str().ok())
-            .map(|value| constant_time_compare_bytes(value.as_bytes(), expected_authorization.as_bytes()))
+            .map(|value| {
+                constant_time_compare_bytes(value.as_bytes(), expected_authorization.as_bytes())
+            })
             .unwrap_or(false)
     }
 }

@@ -325,7 +325,10 @@ async fn run_server(config_path: &Path) -> Result<()> {
                 warn!(error = ?error, "background task ended with error during shutdown");
             }
             Err(_) => {
-                warn!(timeout_secs = join_deadline.as_secs(), "background task did not exit in time during shutdown");
+                warn!(
+                    timeout_secs = join_deadline.as_secs(),
+                    "background task did not exit in time during shutdown"
+                );
             }
         }
     }
