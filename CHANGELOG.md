@@ -25,6 +25,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Security
 - Vulnerability fixes
 
+## [v2.1.0] - 2026-05-18
+
+### Added
+- Added Argon2id hash/verify helpers for node session tokens.
+- Added `token_hash` and `token_generation` fields to registered nodes while keeping legacy `token` reads for upgrade compatibility.
+- Added hash-at-rest coverage, including a migration test for legacy plaintext registry tokens.
+- Added graceful WebSocket shutdown handling so active sessions receive a Close frame during server shutdown.
+
+### Changed
+- Node authorization now verifies plaintext tokens only during handshake, then tracks `token_generation` for the WebSocket hot path.
+- Token refresh now rotates the token hash and increments generation, allowing existing sessions to detect registry-side token changes without repeated hash verification.
+- Install sessions now temporarily hold the plaintext node session token only for the bootstrap flow; generated agent config receives that plaintext explicitly.
+- History writes now use a bounded channel and batched writer task to avoid blocking the realtime WebSocket path.
+- Server tuning constants for timeouts, ping limits, SQLite busy timeout, sanitization limits, and warning intervals are now configurable.
+
+### Fixed
+- Legacy registry files with plaintext node `token` values are automatically migrated on load: the token is hashed into `token_hash`, the plaintext field is cleared, `token_generation` is initialized, and the upgraded registry is persisted back to disk.
+- WebSocket handling now keeps token refresh generation in sync after manual and pre-expiry refreshes.
+
+### Security
+- Node session tokens are no longer persisted in plaintext for new or migrated registry entries.
+- Readonly Basic Auth comparison uses constant-time matching.
+- Systemd service hardening now includes a tighter syscall filter.
+
 ## [v2.0.7] - 2026-05-18
 
 ### Added
