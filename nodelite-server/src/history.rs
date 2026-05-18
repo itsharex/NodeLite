@@ -1,16 +1,19 @@
 //! 历史数据存储:把 `NodeStatus` 中的关键指标写入本地 SQLite 表,
 //! 供前端绘制趋势图。设计目标:
 //!
-//! - 不阻塞实时 WebSocket 流程:所有 SQLite 调用都进入 `spawn_blocking`。
-//! - 节流:同一节点两次写入至少间隔 `DEFAULT_HISTORY_WRITE_INTERVAL_SECS` 秒。
-//! - 自清理:每 5 分钟最多触发一次 `DELETE`,把超过保留期的旧记录删除。
-//! - 自降级:数据库初始化失败时不阻断服务,而是把 `available=false`,实时视图照常运行。
+//! - 不阻塞实时 WebSocket 流程:`record_status` 只做"节流检查 + push 到 channel",
+//!   真正的 SQLite I/O 在独立的 writer task 中以 batch transaction 形式执行;
+//! - 节流:同一节点两次写入至少间隔 `DEFAULT_HISTORY_WRITE_INTERVAL_SECS` 秒;
+//! - 自清理:每 5 分钟最多触发一次 `DELETE`,把超过保留期的旧记录删除;
+//! - 自降级:数据库初始化失败时不阻断服务,而是把 `available=false`,实时视图照常运行;
+//! - 背压:bounded channel + try_send,溢出时记日志并自增 dropped 计数,
+//!   而不是反压实时心跳路径(实时数据比历史趋势更重要)。
 
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -20,8 +23,10 @@ use nodelite_proto::{
     percentage,
 };
 use rusqlite::{Connection, Error as SqliteError, ErrorCode, params};
-use tokio::sync::Mutex;
-use tracing::{error, warn};
+use tokio::sync::{Mutex, RwLock, mpsc};
+use tokio::task::JoinHandle;
+use tokio::time::MissedTickBehavior;
+use tracing::{debug, error, warn};
 
 use crate::fs_security::{create_private_dir_all, ensure_directory_mode};
 
@@ -33,6 +38,20 @@ const SQLITE_BUSY_TIMEOUT_SECS: u64 = 5;
 const SQLITE_BUSY_MAX_RETRIES: u32 = 10;
 const SQLITE_BUSY_RETRY_BASE_MS: u64 = 50;
 const SQLITE_BUSY_RETRY_MAX_MS: u64 = 1_000;
+
+/// Writer 任务的 channel 容量。1000 节点 × 1Hz 上报理论峰值是 1000 msg/s,
+/// 在 100ms flush 间隔下,稳态 backlog ≤ ~100。1024 留出 10x 余量
+/// (突发重连 / Burst 上报),仍然不至于让 record_status 真的被反压。
+const HISTORY_CHANNEL_CAPACITY: usize = 1024;
+/// 一次事务里最多打包多少条 INSERT。给上限是为了在极端 burst 下
+/// 防止单个 fsync 周期被一直推迟。
+const HISTORY_BATCH_MAX: usize = 128;
+/// 没有新写入到达时,writer 也每隔这段时间 flush 一次当前 batch,
+/// 保证最后几条样本不会无限期停留在内存。
+const HISTORY_BATCH_FLUSH_INTERVAL: Duration = Duration::from_millis(100);
+/// 距上一次 DELETE 至少要过这么长时间才再次触发清理。
+const HISTORY_PRUNE_MIN_INTERVAL: Duration = Duration::from_secs(300);
+
 const HISTORY_QUERY_SQL: &str = r#"
         SELECT
             ?1 AS node_id,
@@ -55,17 +74,22 @@ const HISTORY_QUERY_SQL: &str = r#"
 pub struct HistoryStore {
     db_path: Arc<PathBuf>,
     available: Arc<AtomicBool>,
-    /// 持久化 SQLite 连接,避免每次写入都重新打开 + 重设 PRAGMA。
-    /// 用 `Option` 包裹是因为 `initialize()` 前连接尚未建立。
+    /// 持久化 SQLite 连接,只在 query 路径短暂持有;写入由 writer task 独占。
     connection: Arc<Mutex<Option<Connection>>>,
-    /// 节点 → 上一次成功写入时间,用于实现"按时间节流"。
+    /// 节点 → 上一次成功节流通过的时间。仅短暂持有 lock(check + 乐观更新),
+    /// 不再跨越 spawn_blocking,因此与 SQLite I/O 解耦。
     last_written_at: Arc<Mutex<HashMap<String, DateTime<Utc>>>>,
-    /// 最近一次执行清理删除的时间,用于避免每次写入都触发删除。
-    last_pruned_at: Arc<Mutex<Option<DateTime<Utc>>>>,
+    /// 最近一次执行清理删除的 Unix 时间戳(0 = 从未)。Writer task 内部更新,
+    /// 用 AtomicI64 避免再多一把 mutex。
+    last_pruned_at: Arc<AtomicI64>,
     /// WAL/SHM 文件通常在第一次真实写入后才出现,此标志确保后续权限加固只做一次。
     artifacts_hardened_after_write: Arc<AtomicBool>,
-    /// 写入互斥:多个节点的写入串行化,简化 SQLite 端的锁竞争。
-    write_gate: Arc<Mutex<()>>,
+    /// Writer task 的入口。Some 表示已初始化;关停时清空以让 record_status 进入空操作分支。
+    writer_tx: Arc<RwLock<Option<mpsc::Sender<HistoryPoint>>>>,
+    /// Writer task 的 join handle,用于在关停时显式 await。
+    writer_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
+    /// 历史写入被静默丢弃的总数(channel 满或已关闭)。监控该值可观察反压。
+    dropped_writes: Arc<AtomicU64>,
 }
 
 impl HistoryStore {
@@ -75,13 +99,15 @@ impl HistoryStore {
             available: Arc::new(AtomicBool::new(false)),
             connection: Arc::new(Mutex::new(None)),
             last_written_at: Arc::new(Mutex::new(HashMap::new())),
-            last_pruned_at: Arc::new(Mutex::new(None)),
+            last_pruned_at: Arc::new(AtomicI64::new(0)),
             artifacts_hardened_after_write: Arc::new(AtomicBool::new(false)),
-            write_gate: Arc::new(Mutex::new(())),
+            writer_tx: Arc::new(RwLock::new(None)),
+            writer_handle: Arc::new(Mutex::new(None)),
+            dropped_writes: Arc::new(AtomicU64::new(0)),
         }
     }
 
-    /// 初始化数据库:建表、建索引、加锁权限。失败不会抛出,仅记录警告并保持 `available=false`。
+    /// 初始化数据库 + 启动 writer task。失败不会抛出,仅记录警告并保持 `available=false`。
     pub async fn initialize(&self) {
         let db_path = Arc::clone(&self.db_path);
         let result = tokio::task::spawn_blocking(move || initialize_database(db_path.as_ref()))
@@ -90,9 +116,12 @@ impl HistoryStore {
 
         match result {
             Ok(Ok(connection)) => {
-                let mut guard = self.connection.lock().await;
-                *guard = Some(connection);
+                {
+                    let mut guard = self.connection.lock().await;
+                    *guard = Some(connection);
+                }
                 self.available.store(true, Ordering::Relaxed);
+                self.spawn_writer_task().await;
             }
             Ok(Err(error)) => {
                 error!(
@@ -106,13 +135,42 @@ impl HistoryStore {
         }
     }
 
+    /// 启动后台 writer task:消费 channel,做 batch transaction 写入。
+    async fn spawn_writer_task(&self) {
+        let (tx, rx) = mpsc::channel::<HistoryPoint>(HISTORY_CHANNEL_CAPACITY);
+        {
+            let mut guard = self.writer_tx.write().await;
+            *guard = Some(tx);
+        }
+        let context = WriterContext {
+            db_path: Arc::clone(&self.db_path),
+            connection: Arc::clone(&self.connection),
+            last_pruned_at: Arc::clone(&self.last_pruned_at),
+            artifacts_hardened_after_write: Arc::clone(&self.artifacts_hardened_after_write),
+        };
+        let handle = tokio::spawn(run_history_writer(rx, context));
+        let mut guard = self.writer_handle.lock().await;
+        *guard = Some(handle);
+    }
+
     pub fn is_available(&self) -> bool {
         self.available.load(Ordering::Relaxed)
     }
 
+    /// 统计有多少次 record_status 因为 channel 满而被静默丢弃。
+    /// 监控接入后,这个计数应当长期保持在 0;持续非零表示 batch 速率跟不上上报速率。
+    ///
+    /// 目前仅在 unit test 内使用。一旦 #91 (Prometheus exporter 改造) 落地,
+    /// 这个值会作为 `nodelite_history_dropped_writes_total` 暴露出去。
+    #[allow(dead_code)]
+    pub fn dropped_writes(&self) -> u64 {
+        self.dropped_writes.load(Ordering::Relaxed)
+    }
+
     /// 尝试把一次节点状态记录到历史表。
     ///
-    /// 当节点首次上报、距上次写入不足节流窗口、数据库不可用时,本调用静默返回。
+    /// 节流通过 + channel 有空闲槽位时立即返回;否则静默 drop 并自增计数。
+    /// 调用方(WebSocket 心跳路径)永远不会因为 SQLite I/O 而被阻塞。
     pub async fn record_status(&self, status: &NodeStatus) {
         if !self.is_available() {
             return;
@@ -122,10 +180,12 @@ impl HistoryStore {
             return;
         };
 
-        let _write_guard = self.write_gate.lock().await;
+        // 节流:同一节点两次写入至少间隔 N 秒。
+        // 这里乐观更新 last_written_at —— 即便后面 channel 满了导致这条样本被丢弃,
+        // 节流窗口也仍然按"已经写过"算,避免下一周期 burst 重试。
         {
-            let guard = self.last_written_at.lock().await;
-            if let Some(previous) = guard.get(&point.node_id) {
+            let mut throttle = self.last_written_at.lock().await;
+            if let Some(previous) = throttle.get(&point.node_id) {
                 let Ok(elapsed) = point
                     .recorded_at
                     .signed_duration_since(previous.to_owned())
@@ -137,39 +197,50 @@ impl HistoryStore {
                     return;
                 }
             }
+            throttle.insert(point.node_id.clone(), point.recorded_at);
         }
 
-        let prune_before = self.maybe_schedule_prune().await;
-        let db_path = Arc::clone(&self.db_path);
-        let connection_arc = Arc::clone(&self.connection);
-        let artifacts_hardened_after_write = Arc::clone(&self.artifacts_hardened_after_write);
-        let point_for_task = point.clone();
-        let result = tokio::task::spawn_blocking(move || {
-            let guard = connection_arc.blocking_lock();
-            let Some(ref connection) = *guard else {
-                anyhow::bail!("history connection not initialized");
-            };
-            write_history_point(
-                db_path.as_ref(),
-                connection,
-                &point_for_task,
-                prune_before,
-                artifacts_hardened_after_write.as_ref(),
-            )
-        })
-        .await;
+        // 把样本推给 writer task。try_send 在 channel 满时立即失败,这里宁可丢一条样本
+        // 也不要让 WS 处理路径被反压;丢弃由 dropped_writes 计数提示运维。
+        let guard = self.writer_tx.read().await;
+        let Some(tx) = guard.as_ref() else {
+            return;
+        };
+        match tx.try_send(point) {
+            Ok(()) => {}
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                self.dropped_writes.fetch_add(1, Ordering::Relaxed);
+                warn!(
+                    capacity = HISTORY_CHANNEL_CAPACITY,
+                    dropped_total = self.dropped_writes.load(Ordering::Relaxed),
+                    "history writer queue full; dropping write"
+                );
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                // Writer 已退出 — 标记 store 整体不可用,后续 record_status 会快速 return。
+                self.available.store(false, Ordering::Relaxed);
+            }
+        }
+    }
 
-        match result {
-            Ok(Ok(())) => {
-                let mut guard = self.last_written_at.lock().await;
-                guard.insert(point.node_id, point.recorded_at);
-            }
-            Ok(Err(error)) => {
-                warn!(error = ?error, "failed to persist history point");
-            }
-            Err(error) => {
-                warn!(error = ?error, "history write task join failed");
-            }
+    /// 关停:drop sender → writer task 自动 drain 残留 batch 后退出,
+    /// 然后 await 它结束。在 `run_server` 的 shutdown 阶段调用,
+    /// 保证 SIGTERM 时已经被 enqueue 的样本不会随进程退出而丢失。
+    pub async fn shutdown(&self) {
+        let sender = {
+            let mut guard = self.writer_tx.write().await;
+            guard.take()
+        };
+        drop(sender);
+
+        let handle = {
+            let mut guard = self.writer_handle.lock().await;
+            guard.take()
+        };
+        if let Some(handle) = handle
+            && let Err(error) = handle.await
+        {
+            warn!(error = ?error, "history writer task join failed during shutdown");
         }
     }
 
@@ -250,29 +321,113 @@ impl HistoryStore {
         guard.retain(|node_id, _| live_node_ids.contains(node_id.as_str()));
         before.saturating_sub(guard.len())
     }
+}
 
-    /// 判断是否需要在本次写入时附带执行一次过期记录删除。
-    /// 至少 5 分钟才会真正触发一次 DELETE。
-    async fn maybe_schedule_prune(&self) -> Option<DateTime<Utc>> {
-        let mut guard = self.last_pruned_at.lock().await;
-        let now = Utc::now();
-        let should_prune = guard
-            .as_ref()
-            .map(|last_pruned| {
-                now.signed_duration_since(last_pruned.to_owned())
-                    .to_std()
-                    .map(|elapsed| elapsed >= Duration::from_secs(300))
-                    .unwrap_or(false)
-            })
-            .unwrap_or(true);
+/// Writer task 拥有的所有共享状态(都是 `Arc`,可以低成本 clone)。
+struct WriterContext {
+    db_path: Arc<PathBuf>,
+    connection: Arc<Mutex<Option<Connection>>>,
+    last_pruned_at: Arc<AtomicI64>,
+    artifacts_hardened_after_write: Arc<AtomicBool>,
+}
 
-        if should_prune {
-            *guard = Some(now);
-            Some(now - chrono::Duration::hours(DEFAULT_HISTORY_RETENTION_HOURS as i64))
-        } else {
-            None
+/// 单一 writer 任务:对外的所有 record_status 都经过 mpsc 灌入此处。
+///
+/// 关键不变量:
+/// - 任意时刻只有一个 `run_history_writer` task,所以 batch 状态可以是函数局部变量,
+///   不再需要任何额外的 mutex 来保护 batch / last_pruned 等中间状态;
+/// - 一次 flush 把 batch 内多条 INSERT 包进 BEGIN / COMMIT,把 N 次 fsync 折叠成 1 次;
+/// - sender 被全部 drop 后(运行时关停或 store.shutdown())channel 进入 closed 状态,
+///   writer 把残留 batch flush 出去再退出,保证关停时不丢数据。
+async fn run_history_writer(mut rx: mpsc::Receiver<HistoryPoint>, context: WriterContext) {
+    let mut batch: Vec<HistoryPoint> = Vec::with_capacity(HISTORY_BATCH_MAX);
+    let mut flush_timer = tokio::time::interval(HISTORY_BATCH_FLUSH_INTERVAL);
+    // 进程挂起恢复后不要 burst flush,只按固定节奏推进。
+    flush_timer.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    // 跳过第一次 immediate tick,避免启动后立刻空 flush。
+    flush_timer.tick().await;
+
+    loop {
+        tokio::select! {
+            biased;
+            // 如果 batch 已经攒满,立刻 flush;否则继续按节奏走。
+            received = rx.recv() => match received {
+                Some(point) => {
+                    batch.push(point);
+                    if batch.len() >= HISTORY_BATCH_MAX {
+                        flush_history_batch(&mut batch, &context).await;
+                    }
+                }
+                None => break,
+            },
+            _ = flush_timer.tick() => {
+                if !batch.is_empty() {
+                    flush_history_batch(&mut batch, &context).await;
+                }
+            }
         }
     }
+
+    // Sender 全部 drop 之后 drain channel 残留再 flush 一次,这一步保证关停不丢数据。
+    while let Ok(point) = rx.try_recv() {
+        batch.push(point);
+        if batch.len() >= HISTORY_BATCH_MAX {
+            flush_history_batch(&mut batch, &context).await;
+        }
+    }
+    if !batch.is_empty() {
+        flush_history_batch(&mut batch, &context).await;
+    }
+    debug!("history writer task exited");
+}
+
+/// 把 batch 里的所有样本 + 可能的清理任务,放进一个 SQLite 事务里提交。
+async fn flush_history_batch(batch: &mut Vec<HistoryPoint>, context: &WriterContext) {
+    if batch.is_empty() {
+        return;
+    }
+    let points = std::mem::take(batch);
+    let db_path = Arc::clone(&context.db_path);
+    let connection_arc = Arc::clone(&context.connection);
+    let artifacts_hardened = Arc::clone(&context.artifacts_hardened_after_write);
+    let prune_before = should_prune_now(&context.last_pruned_at);
+
+    let result = tokio::task::spawn_blocking(move || {
+        let mut guard = connection_arc.blocking_lock();
+        let Some(ref mut connection) = *guard else {
+            anyhow::bail!("history connection not initialized");
+        };
+        write_history_batch(
+            db_path.as_ref(),
+            connection,
+            &points,
+            prune_before,
+            artifacts_hardened.as_ref(),
+        )
+    })
+    .await;
+
+    match result {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => {
+            warn!(error = ?error, "failed to persist history batch");
+        }
+        Err(error) => {
+            warn!(error = ?error, "history writer batch task join failed");
+        }
+    }
+}
+
+/// 判断本轮 flush 是否需要顺带做一次 DELETE。基于原子时间戳的 CAS,
+/// 多次同时调用不会重复触发,且 writer 是单线程消费者,这里实际上 race-free。
+fn should_prune_now(last_pruned_at: &AtomicI64) -> Option<DateTime<Utc>> {
+    let now_ts = Utc::now().timestamp();
+    let prev_ts = last_pruned_at.load(Ordering::Relaxed);
+    if prev_ts > 0 && now_ts.saturating_sub(prev_ts) < HISTORY_PRUNE_MIN_INTERVAL.as_secs() as i64 {
+        return None;
+    }
+    last_pruned_at.store(now_ts, Ordering::Relaxed);
+    Some(Utc::now() - chrono::Duration::hours(DEFAULT_HISTORY_RETENTION_HOURS as i64))
 }
 
 /// 建库:如果父目录不存在则创建,然后建表 / 建索引并收紧权限。
@@ -317,47 +472,60 @@ fn initialize_database(db_path: &PathBuf) -> Result<Connection> {
     Ok(connection)
 }
 
-/// 写入一条历史记录,同时按需删除过期记录。复用已打开的连接,避免重复 open + PRAGMA。
-fn write_history_point(
+/// 写入一批历史记录,同时按需删除过期记录。
+///
+/// 关键点:
+/// - 所有 INSERT 与可选 DELETE 都在同一个 `BEGIN ... COMMIT` 内,
+///   把 N 次 fsync 折叠成 1 次 — 这是 #32 修复的核心改进;
+/// - 失败时整个事务回滚,不会留下部分写入的状态;
+/// - 沿用 `with_sqlite_busy_retry` 来吸收 BUSY/LOCKED 冲突。
+fn write_history_batch(
     db_path: &PathBuf,
-    connection: &Connection,
-    point: &HistoryPoint,
+    connection: &mut Connection,
+    points: &[HistoryPoint],
     prune_before: Option<DateTime<Utc>>,
     artifacts_hardened_after_write: &AtomicBool,
 ) -> Result<()> {
+    if points.is_empty() {
+        return Ok(());
+    }
     with_sqlite_busy_retry(|| {
-        connection.execute(
-            r#"
-            INSERT INTO history_points (
-                node_id,
-                recorded_at,
-                cpu_usage_percent,
-                memory_used_percent,
-                rx_bytes_per_sec,
-                tx_bytes_per_sec,
-                latency_ms,
-                disk_used_percent
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-            "#,
-            params![
-                &point.node_id,
-                point.recorded_at.timestamp(),
-                point.cpu_usage_percent,
-                point.memory_used_percent,
-                point.rx_bytes_per_sec,
-                point.tx_bytes_per_sec,
-                point.latency_ms,
-                point.disk_used_percent,
-            ],
-        )?;
-
+        let tx = connection.transaction()?;
+        {
+            let mut insert = tx.prepare_cached(
+                r#"
+                INSERT INTO history_points (
+                    node_id,
+                    recorded_at,
+                    cpu_usage_percent,
+                    memory_used_percent,
+                    rx_bytes_per_sec,
+                    tx_bytes_per_sec,
+                    latency_ms,
+                    disk_used_percent
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                "#,
+            )?;
+            for point in points {
+                insert.execute(params![
+                    &point.node_id,
+                    point.recorded_at.timestamp(),
+                    point.cpu_usage_percent,
+                    point.memory_used_percent,
+                    point.rx_bytes_per_sec,
+                    point.tx_bytes_per_sec,
+                    point.latency_ms,
+                    point.disk_used_percent,
+                ])?;
+            }
+        }
         if let Some(cutoff) = prune_before {
-            connection.execute(
+            tx.execute(
                 "DELETE FROM history_points WHERE recorded_at < ?1",
                 params![cutoff.timestamp()],
             )?;
         }
-
+        tx.commit()?;
         Ok(())
     })?;
     if !artifacts_hardened_after_write.load(Ordering::Relaxed) {
@@ -366,6 +534,25 @@ fn write_history_point(
     }
 
     Ok(())
+}
+
+/// 单点写入,仅用于单元测试中"绕过 writer task 直接验证 SQL 行为"的场景。
+/// 生产路径请使用 `HistoryStore::record_status` → writer task → `write_history_batch`。
+#[cfg(test)]
+fn write_history_point(
+    db_path: &PathBuf,
+    connection: &mut Connection,
+    point: &HistoryPoint,
+    prune_before: Option<DateTime<Utc>>,
+    artifacts_hardened_after_write: &AtomicBool,
+) -> Result<()> {
+    write_history_batch(
+        db_path,
+        connection,
+        std::slice::from_ref(point),
+        prune_before,
+        artifacts_hardened_after_write,
+    )
 }
 
 fn query_history(
@@ -627,10 +814,10 @@ mod tests {
             let data_dir = temp_dir.join("data");
             let db_path = data_dir.join("history.sqlite3");
 
-            let connection = initialize_database(&db_path).expect("database should initialize");
+            let mut connection = initialize_database(&db_path).expect("database should initialize");
             write_history_point(
                 &db_path,
-                &connection,
+                &mut connection,
                 &HistoryPoint {
                     node_id: "hk-01".to_string(),
                     recorded_at: Utc::now(),
@@ -697,13 +884,13 @@ mod tests {
         let temp_dir = std::env::temp_dir().join(format!("nodelite-history-query-{unique}"));
         std::fs::create_dir_all(&temp_dir).expect("temp dir should exist");
         let db_path = temp_dir.join("history.sqlite3");
-        let connection = initialize_database(&db_path).expect("database should initialize");
+        let mut connection = initialize_database(&db_path).expect("database should initialize");
         let hardened = AtomicBool::new(false);
         let start = Utc::now() - Duration::hours(6);
         for index in 0..180 {
             write_history_point(
                 &db_path,
-                &connection,
+                &mut connection,
                 &HistoryPoint {
                     node_id: "hk-01".to_string(),
                     recorded_at: start + Duration::seconds(index * 120),
@@ -777,6 +964,120 @@ mod tests {
 
         assert_eq!(SQLITE_BUSY_MAX_RETRIES, 10);
         assert_eq!(delays_ms, vec![50, 100, 200, 400, 800, 1000, 1000, 1000]);
+    }
+
+    fn fake_status_for(node_id: &str, recorded_at: chrono::DateTime<Utc>) -> NodeStatus {
+        NodeStatus {
+            identity: NodeIdentity {
+                node_id: node_id.to_string(),
+                node_label: format!("{node_id}-label"),
+                hostname: format!("{node_id}.internal"),
+                os: "Ubuntu".to_string(),
+                kernel_version: None,
+                cpu_model: None,
+                cpu_cores: 2,
+                agent_version: "0.1.0".to_string(),
+                boot_time: None,
+                tags: Vec::new(),
+            },
+            remote_ip: Some("198.51.100.24".to_string()),
+            snapshot: Some(NodeSnapshot {
+                collected_at: recorded_at,
+                cpu_usage_percent: 42.0,
+                load: LoadAverage {
+                    one: 0.1,
+                    five: 0.2,
+                    fifteen: 0.3,
+                },
+                memory: MemoryUsage {
+                    total_bytes: 1024,
+                    used_bytes: 512,
+                    available_bytes: 512,
+                    swap_total_bytes: 0,
+                    swap_used_bytes: 0,
+                },
+                uptime_secs: 60,
+                disks: Vec::new(),
+                network: NetworkCounters {
+                    total_rx_bytes: 1,
+                    total_tx_bytes: 2,
+                    rx_bytes_per_sec: Some(3.0),
+                    tx_bytes_per_sec: Some(4.0),
+                },
+            }),
+            last_seen: Some(recorded_at),
+            latency_ms: Some(12),
+            online: true,
+        }
+    }
+
+    fn temp_history_db_path(test_name: &str) -> std::path::PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be monotonic enough")
+            .as_nanos();
+        let temp_dir = std::env::temp_dir().join(format!("nodelite-history-{test_name}-{unique}"));
+        std::fs::create_dir_all(&temp_dir).expect("temp dir should exist");
+        temp_dir.join("history.sqlite3")
+    }
+
+    /// 集成 record_status → writer task → SQLite 全链路:
+    /// 多次写入要在 channel + batch 模型下全部落库,而不仅仅是最后一条。
+    #[tokio::test]
+    async fn record_status_flushes_through_writer_task_to_sqlite() {
+        let db_path = temp_history_db_path("writer-task");
+        let store = HistoryStore::new(db_path.clone());
+        store.initialize().await;
+        assert!(store.is_available());
+
+        // 写入 5 个不同节点的样本(同节点会被 throttle 拦掉,所以这里用不同 node_id)。
+        let now = Utc::now();
+        for i in 0..5 {
+            let node_id = format!("node-{i:02}");
+            let status = fake_status_for(&node_id, now);
+            store.record_status(&status).await;
+        }
+
+        // 触发 shutdown — writer 会把已经入队但还没 flush 的样本 drain 出来。
+        store.shutdown().await;
+        assert_eq!(
+            store.dropped_writes(),
+            0,
+            "no writes should have been dropped"
+        );
+
+        // 验证 5 条样本都成功落库。
+        let connection = initialize_database(&db_path).expect("re-open database");
+        let count: i64 = connection
+            .query_row("SELECT COUNT(*) FROM history_points", [], |row| row.get(0))
+            .expect("count query");
+        assert_eq!(count, 5);
+
+        let _ = std::fs::remove_file(&db_path);
+        if let Some(parent) = db_path.parent() {
+            let _ = std::fs::remove_dir(parent);
+        }
+    }
+
+    /// shutdown() 之后再调用 record_status 必须立刻返回,
+    /// 不能 panic 也不能阻塞;此时 sender 已被清空,store 会进入 unavailable 状态。
+    #[tokio::test]
+    async fn record_status_is_noop_after_shutdown() {
+        let db_path = temp_history_db_path("after-shutdown");
+        let store = HistoryStore::new(db_path.clone());
+        store.initialize().await;
+        store.shutdown().await;
+
+        // shutdown 不会触发 dropped 计数 —— 它走的是 "writer_tx 被 take 走" 的快速 return 路径,
+        // 不会走 try_send。
+        let status = fake_status_for("hk-01", Utc::now());
+        store.record_status(&status).await;
+        assert_eq!(store.dropped_writes(), 0);
+
+        let _ = std::fs::remove_file(&db_path);
+        if let Some(parent) = db_path.parent() {
+            let _ = std::fs::remove_dir(parent);
+        }
     }
 
     #[cfg(unix)]

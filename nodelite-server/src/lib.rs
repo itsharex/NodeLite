@@ -250,6 +250,7 @@ async fn run_server(config_path: &Path) -> Result<()> {
         shutdown: shutdown.clone(),
     };
     let shared_for_shutdown = state.shared.clone();
+    let history_for_shutdown = state.history.clone();
     let snapshot_path = config.snapshot_path.clone();
     let protected_routes = Router::new()
         .route("/", get(index))
@@ -340,6 +341,12 @@ async fn run_server(config_path: &Path) -> Result<()> {
     if let Err(error) = persist_snapshot(snapshot_path.as_path(), &final_statuses).await {
         warn!(error = ?error, path = %snapshot_path.display(), "failed to flush final snapshot");
     }
+
+    // History writer 仍可能有入队但未 flush 的样本(WS 在收到 Close 之前
+    // 最后那一拍上报的数据)。显式 drain 一次,避免 systemd restart 后历史断档。
+    info!("draining history writer before shutdown");
+    history_for_shutdown.shutdown().await;
+
     info!("nodelite server shutdown complete");
     Ok(())
 }
