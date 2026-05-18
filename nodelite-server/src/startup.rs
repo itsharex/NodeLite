@@ -1,0 +1,397 @@
+use std::net::SocketAddr;
+use std::path::Path;
+use std::sync::Arc;
+use std::time::Duration;
+
+use anyhow::{Context, Result, anyhow, bail};
+use axum::Router;
+use axum::extract::Request;
+use axum::http::{HeaderValue, header};
+use axum::middleware::{Next, from_fn, from_fn_with_state};
+use axum::response::Response;
+use axum::routing::{get, post};
+use nodelite_proto::{ServerConfig, parse_server_config};
+use tokio::fs;
+use tokio::net::TcpListener;
+use tokio::sync::RwLock;
+use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
+use tower_http::trace::TraceLayer;
+use tracing::{info, warn};
+
+use crate::admission::{InstallAdmissionConfig, InstallAdmissionController, WsAdmissionController};
+use crate::agent_logs::AgentLogStore;
+use crate::app_state::{AppState, ServerReadiness};
+use crate::auth::{ReadonlyRouteAuth, TwoFactorSessions};
+use crate::background::{
+    spawn_insecure_transport_warning, spawn_registry_reloader, spawn_stale_reaper,
+};
+use crate::fs_security::log_if_directory_is_not_private;
+use crate::handlers::{
+    bootstrap, brand_logo_dark_asset, brand_logo_light_asset, change_readonly_password,
+    disable_two_factor, enable_two_factor, healthz, index, install_agent_script, install_bootstrap,
+    logout_and_reauth, metrics, node_detail, node_history, node_logs, node_status, nodes, overview,
+    readyz, refresh_node_token, require_readonly_auth, server_update_log, settings,
+    start_server_update, start_two_factor_setup, ui_i18n_asset, verify_2fa_api, verify_2fa_page,
+};
+use crate::history::HistoryStore;
+use crate::registry::NodeRegistry;
+use crate::snapshot::{load_snapshot, persist_snapshot, spawn_snapshot_persistor};
+use crate::state::SharedState;
+use crate::ws::ws_handler;
+
+pub(crate) const PROTECTED_CONTENT_SECURITY_POLICY: &str = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; \
+     img-src 'self' data:; connect-src 'self' https://raw.githubusercontent.com https://api.github.com; base-uri 'none'; frame-ancestors 'none'; form-action 'self'";
+pub(crate) const PROTECTED_CACHE_CONTROL: &str = "no-store, no-cache, must-revalidate";
+
+/// 启动 Web 服务:加载配置 → 初始化各子系统 → 注册路由 → 监听端口。
+pub(crate) async fn run_server(config_path: &Path) -> Result<()> {
+    let config = Arc::new(load_server_config(config_path).await?);
+    let listen_addr = config.listen;
+    let public_base_url = config.public_base_url.clone();
+    let refresh_interval_secs = config.refresh_interval_secs;
+    let readonly_route_auth = ReadonlyRouteAuth::from_config(config.readonly_auth.clone());
+
+    // 密码强度检查:如果启用了认证,验证密码是否满足最低安全要求
+    if let Some(ref auth_config) = config.readonly_auth {
+        validate_password_strength(&auth_config.password)?;
+    }
+
+    let registry = NodeRegistry::load(config.node_registry_path.as_path())
+        .await
+        .with_context(|| {
+            format!(
+                "failed to load node registry {}",
+                config.node_registry_path.display()
+            )
+        })?;
+    let shared = SharedState::new(Arc::clone(&config));
+    let history = HistoryStore::new(
+        config.history_db_path.clone(),
+        config.sqlite_busy_timeout_secs,
+    );
+    let agent_logs = AgentLogStore::new();
+    history.initialize().await;
+    let readiness = ServerReadiness::new(history.is_available());
+    readiness.mark_history_available(history.is_available());
+    restore_snapshot_if_available(&shared, config.snapshot_path.as_path()).await;
+
+    let shutdown = CancellationToken::new();
+    let mut background_tasks: Vec<JoinHandle<()>> = Vec::new();
+
+    background_tasks.push(spawn_registry_reloader(
+        registry.clone(),
+        history.clone(),
+        agent_logs.clone(),
+        readiness.clone(),
+        shutdown.clone(),
+    ));
+    background_tasks.push(spawn_stale_reaper(shared.clone(), shutdown.clone()));
+    background_tasks.push(spawn_snapshot_persistor(
+        shared.clone(),
+        config.snapshot_path.clone(),
+        shutdown.clone(),
+    ));
+    if let Some(handle) = spawn_insecure_transport_warning(
+        config.public_base_url.clone(),
+        config.listen,
+        config.insecure_transport_warn_interval_secs,
+        shutdown.clone(),
+    ) {
+        background_tasks.push(handle);
+    }
+
+    let enrolled_nodes = registry.count().await;
+    info!(
+        registry_path = %config.node_registry_path.display(),
+        enrolled_nodes,
+        "node registry loaded",
+    );
+
+    let state = AppState {
+        history,
+        agent_logs,
+        install_admission: InstallAdmissionController::new(InstallAdmissionConfig {
+            // 复用 ws 子小节里同名的限流配置 —— 站在运维视角它们是同一组
+            // "认证失败暴力策略"参数,没必要再多开一组。
+            auth_fail_window_secs: config.ws.auth_fail_window_secs,
+            auth_fail_max_attempts: config.ws.auth_fail_max_attempts,
+            auth_block_secs: config.ws.auth_block_secs,
+        }),
+        verify_2fa_admission: InstallAdmissionController::new(InstallAdmissionConfig {
+            // 与 install / ws 同一组阈值,但实例独立 —— 攻击者用 install
+            // 失败把 IP 撞到封禁,不应该把同一时间的合法 2FA 登录也封掉。
+            auth_fail_window_secs: config.ws.auth_fail_window_secs,
+            auth_fail_max_attempts: config.ws.auth_fail_max_attempts,
+            auth_block_secs: config.ws.auth_block_secs,
+        }),
+        readiness,
+        registry,
+        shared,
+        ws_admission: WsAdmissionController::new(&config.ws),
+        readonly_auth: Arc::new(RwLock::new(readonly_route_auth.clone())),
+        two_factor_sessions: TwoFactorSessions::new(),
+        config_path: Arc::new(config_path.to_path_buf()),
+        shutdown: shutdown.clone(),
+    };
+    let shared_for_shutdown = state.shared.clone();
+    let history_for_shutdown = state.history.clone();
+    let snapshot_path = config.snapshot_path.clone();
+    let protected_routes = Router::new()
+        .route("/", get(index))
+        .route("/nodes/{node_id}", get(node_detail))
+        .route("/assets/brand-logo-dark.webp", get(brand_logo_dark_asset))
+        .route("/assets/brand-logo-light.webp", get(brand_logo_light_asset))
+        .route("/assets/ui-i18n.json", get(ui_i18n_asset))
+        .route("/api/bootstrap", get(bootstrap))
+        .route("/api/overview", get(overview))
+        .route("/metrics", get(metrics))
+        .route("/api/nodes", get(nodes))
+        .route("/api/nodes/{node_id}", get(node_status))
+        .route("/api/nodes/{node_id}/history", get(node_history))
+        .route("/api/nodes/{node_id}/logs", get(node_logs))
+        .route(
+            "/api/nodes/{node_id}/refresh-token",
+            post(refresh_node_token),
+        )
+        .route("/api/settings", get(settings))
+        .route("/api/settings/password", post(change_readonly_password))
+        .route("/api/settings/update/server", post(start_server_update))
+        .route("/api/settings/update/server/log", get(server_update_log))
+        .route("/api/settings/2fa/start", post(start_two_factor_setup))
+        .route("/api/settings/2fa/enable", post(enable_two_factor))
+        .route("/api/settings/2fa/disable", post(disable_two_factor))
+        .route_layer(from_fn(set_protected_response_headers))
+        .route_layer(from_fn_with_state(state.clone(), require_readonly_auth));
+    let app = Router::new()
+        .route("/healthz", get(healthz))
+        .route("/readyz", get(readyz))
+        .route("/logout-and-reauth", get(logout_and_reauth))
+        .route("/verify-2fa", get(verify_2fa_page))
+        .route("/api/verify-2fa", post(verify_2fa_api))
+        .route("/install/install-agent.sh", get(install_agent_script))
+        .route("/install/bootstrap", get(install_bootstrap))
+        .route("/ws", get(ws_handler))
+        .merge(protected_routes)
+        .with_state(state)
+        .layer(TraceLayer::new_for_http());
+
+    let listener = TcpListener::bind(listen_addr)
+        .await
+        .with_context(|| format!("failed to bind server listener to {listen_addr}"))?;
+
+    info!(
+        listen = %listen_addr,
+        public_base_url = %public_base_url,
+        refresh_interval_secs,
+        "nodelite server listening",
+    );
+
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await
+    .context("server exited unexpectedly")?;
+
+    // axum 的 graceful shutdown 只 drain HTTP 请求,不会通知 WebSocket 会话或
+    // 后台任务。这里在 HTTP 端 drain 完成后, cancel 全局 token, 让:
+    //   - 每个 spawn_* 后台任务从各自的 select! 跳出, 结束 loop;
+    //   - 每个活跃 WebSocket handle_socket 发出 Close 帧后退出。
+    info!("propagating shutdown signal to background tasks and websocket sessions");
+    shutdown.cancel();
+
+    // 给所有后台任务最多 5 秒收尾;超时则强制 abort 避免拖延 systemd 的 TimeoutStopSec。
+    let join_deadline = Duration::from_secs(5);
+    for handle in background_tasks {
+        match tokio::time::timeout(join_deadline, handle).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                warn!(error = ?error, "background task ended with error during shutdown");
+            }
+            Err(_) => {
+                warn!(
+                    timeout_secs = join_deadline.as_secs(),
+                    "background task did not exit in time during shutdown"
+                );
+            }
+        }
+    }
+
+    // 周期持久化任务每 15 秒落盘一次,SIGTERM 期间最近一次 tick 之后的状态变更可能
+    // 还没刷到磁盘。这里同步再落一次,确保 systemd restart 后看到的就是退出前最新视图。
+    info!("flushing final snapshot before shutdown");
+    let final_statuses = shared_for_shutdown.list_statuses().await;
+    if let Err(error) = persist_snapshot(snapshot_path.as_path(), &final_statuses).await {
+        warn!(error = ?error, path = %snapshot_path.display(), "failed to flush final snapshot");
+    }
+
+    // History writer 仍可能有入队但未 flush 的样本(WS 在收到 Close 之前
+    // 最后那一拍上报的数据)。显式 drain 一次,避免 systemd restart 后历史断档。
+    info!("draining history writer before shutdown");
+    history_for_shutdown.shutdown().await;
+
+    info!("nodelite server shutdown complete");
+    Ok(())
+}
+
+/// 统一给受保护的 UI / API 响应补齐安全头,避免每个 handler 重复手写。
+pub(crate) async fn set_protected_response_headers(request: Request, next: Next) -> Response {
+    let mut response = next.run(request).await;
+    let headers = response.headers_mut();
+    headers.insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static(PROTECTED_CONTENT_SECURITY_POLICY),
+    );
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    headers.insert(
+        header::REFERRER_POLICY,
+        HeaderValue::from_static("strict-origin-when-cross-origin"),
+    );
+    headers.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static(PROTECTED_CACHE_CONTROL),
+    );
+    headers.insert(header::PRAGMA, HeaderValue::from_static("no-cache"));
+    response
+}
+
+/// 加载并解析 server.toml,顺带对 snapshot / history 目录的不存在情况发出提醒。
+pub(crate) async fn load_server_config(path: &Path) -> Result<ServerConfig> {
+    let content = fs::read_to_string(path)
+        .await
+        .with_context(|| format!("failed to read config file {}", path.display()))?;
+    let config = parse_server_config(&content)
+        .map_err(|error| anyhow!("failed to parse {}: {error}", path.display()))?;
+
+    if let Some(parent) = config.snapshot_path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        if !parent.exists() {
+            warn!(
+                snapshot_dir = %parent.display(),
+                "snapshot directory does not exist yet; it will be created later",
+            );
+        } else {
+            log_if_directory_is_not_private(parent, "snapshot_path.parent");
+        }
+    }
+    if let Some(parent) = config.history_db_path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        if !parent.exists() {
+            warn!(
+                history_dir = %parent.display(),
+                "history directory does not exist yet; it will be created later",
+            );
+        } else {
+            log_if_directory_is_not_private(parent, "history_db_path.parent");
+        }
+    }
+    if let Some(parent) = config.node_registry_path.parent()
+        && !parent.as_os_str().is_empty()
+        && parent.exists()
+    {
+        log_if_directory_is_not_private(parent, "node_registry_path.parent");
+    }
+
+    Ok(config)
+}
+
+/// 初始化 `tracing` 日志,支持通过 `RUST_LOG` 调整级别。
+pub(crate) fn init_tracing() {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "nodelite_server=info,tower_http=info".into()),
+        )
+        .with_target(false)
+        .compact()
+        .init();
+}
+
+/// 验证密码强度:至少 8 字符,包含字母和数字。
+/// 如果密码过弱,返回错误并给出建议。
+fn validate_password_strength(password: &str) -> Result<()> {
+    const MIN_LENGTH: usize = 8;
+
+    if password.len() < MIN_LENGTH {
+        bail!(
+            "READONLY_PASSWORD is too short ({} chars). Minimum {} characters required.\n\
+             Recommendation: Use a strong random password, e.g.:\n  \
+             export READONLY_PASSWORD=\"$(openssl rand -base64 24)\"",
+            password.len(),
+            MIN_LENGTH
+        );
+    }
+
+    let has_letter = password.chars().any(|c| c.is_alphabetic());
+    let has_digit = password.chars().any(|c| c.is_ascii_digit());
+
+    if !has_letter || !has_digit {
+        warn!(
+            "READONLY_PASSWORD does not meet recommended strength (letters + digits).\n\
+             Current password: {} letters, {} digits.\n\
+             Recommendation: Use a strong random password, e.g.:\n  \
+             export READONLY_PASSWORD=\"$(openssl rand -base64 24)\"",
+            if has_letter { "has" } else { "no" },
+            if has_digit { "has" } else { "no" }
+        );
+    }
+
+    Ok(())
+}
+
+/// 启动期尝试从磁盘恢复一份 NodeStatus 列表,失败时记录日志并继续以空状态启动。
+async fn restore_snapshot_if_available(shared: &SharedState, path: &Path) {
+    if !path.exists() {
+        return;
+    }
+
+    match load_snapshot(path).await {
+        Ok(statuses) => {
+            shared.restore_statuses(statuses).await;
+        }
+        Err(error) => {
+            warn!(error = ?error, path = %path.display(), "failed to restore snapshot; continuing with empty state");
+        }
+    }
+}
+
+/// 等待 SIGTERM / SIGINT,任意一个到达即触发 axum 的优雅停机。
+///
+/// 仅在 unix 平台监听 SIGTERM;其它平台只听 Ctrl-C。两路任一就绪都会立即返回,
+/// 因此即便其中一路注册失败也不会阻塞另一路 —— 否则 systemd 的 SIGTERM 会被静默忽略。
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        if let Err(error) = tokio::signal::ctrl_c().await {
+            warn!(error = ?error, "failed to listen for ctrl-c");
+            std::future::pending::<()>().await;
+        }
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut stream) => {
+                stream.recv().await;
+            }
+            Err(error) => {
+                warn!(error = ?error, "failed to install SIGTERM handler");
+                std::future::pending::<()>().await;
+            }
+        }
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => info!("received SIGINT; initiating graceful shutdown"),
+        _ = terminate => info!("received SIGTERM; initiating graceful shutdown"),
+    }
+}
