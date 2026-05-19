@@ -82,8 +82,8 @@ pub(crate) struct NodeLogsQuery {
 }
 
 /// 首页 HTML:把刷新周期等参数注入模板。
-pub(crate) async fn index(State(state): State<AppState>) -> Html<&'static str> {
-    Html(index_html(state.shared.config().refresh_interval_secs))
+pub(crate) async fn index(State(state): State<AppState>) -> Html<String> {
+    Html(index_html(state.shared.config().refresh_interval_secs).to_string())
 }
 
 /// 节点详情页 HTML。

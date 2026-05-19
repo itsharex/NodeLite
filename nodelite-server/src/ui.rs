@@ -6,7 +6,7 @@
 // - 国际化字典放在 `assets/ui-i18n.json`,同样通过 `include_str!` 一并编译进二进制。
 
 use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use tracing::error;
 
@@ -16,7 +16,7 @@ pub const UI_I18N_JSON: &str = include_str!("../assets/ui-i18n.json");
 pub const UI_I18N_ASSET_PATH: &str = "/assets/ui-i18n.json";
 
 /// 渲染首页 HTML:把刷新间隔与 i18n 资源路径替换到模板占位符里。
-pub fn index_html(refresh_interval_secs: u64) -> &'static str {
+pub fn index_html(refresh_interval_secs: u64) -> Arc<String> {
     cached_template(&INDEX_TEMPLATE_CACHE, refresh_interval_secs, INDEX_TEMPLATE)
 }
 
@@ -32,14 +32,14 @@ const INDEX_TEMPLATE: &str = include_str!("../assets/index.html");
 
 const NODE_TEMPLATE: &str = include_str!("../assets/node.html");
 
-static INDEX_TEMPLATE_CACHE: OnceLock<Mutex<HashMap<u64, &'static str>>> = OnceLock::new();
-static NODE_TEMPLATE_CACHE: OnceLock<Mutex<HashMap<u64, &'static str>>> = OnceLock::new();
+static INDEX_TEMPLATE_CACHE: OnceLock<Mutex<HashMap<u64, Arc<String>>>> = OnceLock::new();
+static NODE_TEMPLATE_CACHE: OnceLock<Mutex<HashMap<u64, Arc<String>>>> = OnceLock::new();
 
 fn cached_template(
-    cache: &OnceLock<Mutex<HashMap<u64, &'static str>>>,
+    cache: &OnceLock<Mutex<HashMap<u64, Arc<String>>>>,
     refresh_interval_secs: u64,
     template: &str,
-) -> &'static str {
+) -> Arc<String> {
     let cache = cache.get_or_init(|| Mutex::new(HashMap::new()));
     let mut cache = match cache.lock() {
         Ok(cache) => cache,
@@ -49,7 +49,7 @@ fn cached_template(
         }
     };
     if let Some(rendered) = cache.get(&refresh_interval_secs) {
-        return rendered;
+        return rendered.clone();
     }
 
     let rendered = template
@@ -58,20 +58,21 @@ fn cached_template(
             &(refresh_interval_secs * 1000).to_string(),
         )
         .replace("__I18N_ASSET_PATH__", UI_I18N_ASSET_PATH);
-    let rendered = Box::leak(rendered.into_boxed_str());
-    cache.insert(refresh_interval_secs, rendered);
+    let rendered = Arc::new(rendered);
+    cache.insert(refresh_interval_secs, rendered.clone());
     rendered
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
     use super::{index_html, node_html};
 
     #[test]
     fn index_html_reuses_cached_render_for_same_refresh_interval() {
         let first = index_html(5);
         let second = index_html(5);
-        assert!(std::ptr::eq(first.as_ptr(), second.as_ptr()));
+        assert!(Arc::ptr_eq(&first, &second));
         assert!(first.contains("/assets/ui-i18n.json"));
     }
 
