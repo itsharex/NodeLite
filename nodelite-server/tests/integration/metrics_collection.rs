@@ -60,13 +60,17 @@ async fn prometheus_metrics_export_reflects_current_nodes() -> Result<()> {
     assert!(metrics.contains("nodelite_nodes_offline 1"));
     assert!(metrics.contains("nodelite_node_online{node_id=\"itest-metrics-02\""));
     assert!(metrics.contains("nodelite_node_online{node_id=\"itest-metrics-03\""));
+    assert!(metrics.contains("nodelite_node_info{node_id=\"itest-metrics-02\""));
+    assert!(metrics.contains("nodelite_node_info{node_id=\"itest-metrics-03\""));
     assert!(metrics.contains("nodelite_node_snapshot_timestamp_seconds"));
+    assert!(metrics.contains("nodelite_node_cpu_usage_ratio"));
+    assert!(metrics.contains("nodelite_node_network_bytes_total"));
     assert!(metrics.contains("nodelite_network_rate_bytes_per_second{direction=\"rx\"}"));
     assert!(
-        metrics.contains("nodelite_node_online{node_id=\"itest-metrics-02\",node_label=\"Integration Metrics 02\",hostname=\"itest-metrics-02.example.internal\",os=\"Linux\"} 1")
+        metrics.contains("nodelite_node_info{node_id=\"itest-metrics-02\",node_label=\"Integration Metrics 02\",hostname=\"itest-metrics-02.example.internal\",os=\"Linux\",agent_version=\"integration-test\"} 1")
     );
     assert!(
-        metrics.contains("nodelite_node_online{node_id=\"itest-metrics-03\",node_label=\"Integration Metrics 03\",hostname=\"itest-metrics-03.example.internal\",os=\"Linux\"} 0")
+        metrics.contains("nodelite_node_info{node_id=\"itest-metrics-03\",node_label=\"Integration Metrics 03\",hostname=\"itest-metrics-03.example.internal\",os=\"Linux\",agent_version=\"integration-test\"} 1")
     );
 
     agent.disconnect().await?;
