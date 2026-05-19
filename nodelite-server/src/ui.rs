@@ -121,7 +121,7 @@ fn build_page_csp(template: &str) -> String {
         .join(" ");
 
     format!(
-        "default-src 'self'; script-src 'self' {script_hashes}; style-src 'self' {style_hashes}; {}",
+        "default-src 'self'; script-src 'self' {script_hashes}; style-src 'self' 'unsafe-inline' {style_hashes}; style-src-elem 'self' {style_hashes}; style-src-attr 'unsafe-inline'; {}",
         PAGE_CSP_DIRECTIVES.trim_start_matches("default-src 'self'; ")
     )
 }
@@ -196,11 +196,12 @@ mod tests {
     }
 
     #[test]
-    fn page_csps_remove_unsafe_inline_and_pin_inline_blocks() {
+    fn page_csps_pin_scripts_and_allow_inline_styles_for_dashboard_layout() {
         for csp in [index_page_csp(), node_page_csp(), verify_2fa_page_csp()] {
-            assert!(!csp.contains("'unsafe-inline'"));
             assert!(csp.contains("script-src 'self' 'sha256-"));
-            assert!(csp.contains("style-src 'self' 'sha256-"));
+            assert!(!csp.contains("script-src 'self' 'unsafe-inline'"));
+            assert!(csp.contains("style-src 'self' 'unsafe-inline' 'sha256-"));
+            assert!(csp.contains("style-src-attr 'unsafe-inline'"));
         }
     }
 }
