@@ -281,11 +281,11 @@ async fn issued_tokens_default_to_thirty_day_expiry() {
 
     let issued = issue_node(
         &path,
-            IssueNodeRequest {
-                node_id: "hk-01".to_string(),
-                node_label: Some("Hong Kong 01".to_string()),
-                tags: Vec::new(),
-            },
+        IssueNodeRequest {
+            node_id: "hk-01".to_string(),
+            node_label: Some("Hong Kong 01".to_string()),
+            tags: Vec::new(),
+        },
     )
     .await
     .expect("node should be issued");
