@@ -324,35 +324,16 @@ pub(crate) fn init_tracing() {
         .init();
 }
 
-/// 验证密码强度:至少 8 字符,包含字母和数字。
-/// 如果密码过弱,返回错误并给出建议。
+/// 启动期验证 `READONLY_PASSWORD`:复用 `auth::validate_password_strength`,
+/// 把统一规则的 `&'static str` 错误包装成带环境变量上下文的 `anyhow::Error`。
 fn validate_password_strength(password: &str) -> Result<()> {
-    const MIN_LENGTH: usize = 8;
-
-    if password.len() < MIN_LENGTH {
+    if let Err(reason) = crate::auth::validate_password_strength(password) {
         bail!(
-            "READONLY_PASSWORD is too short ({} chars). Minimum {} characters required.\n\
-             Recommendation: Use a strong random password, e.g.:\n  \
-             export READONLY_PASSWORD=\"$(openssl rand -base64 24)\"",
-            password.len(),
-            MIN_LENGTH
+            "READONLY_PASSWORD rejected: {reason}.\n\
+             Recommendation: use a strong random password, e.g.:\n  \
+             export READONLY_PASSWORD=\"$(openssl rand -base64 24)\""
         );
     }
-
-    let has_letter = password.chars().any(|c| c.is_alphabetic());
-    let has_digit = password.chars().any(|c| c.is_ascii_digit());
-
-    if !has_letter || !has_digit {
-        warn!(
-            "READONLY_PASSWORD does not meet recommended strength (letters + digits).\n\
-             Current password: {} letters, {} digits.\n\
-             Recommendation: Use a strong random password, e.g.:\n  \
-             export READONLY_PASSWORD=\"$(openssl rand -base64 24)\"",
-            if has_letter { "has" } else { "no" },
-            if has_digit { "has" } else { "no" }
-        );
-    }
-
     Ok(())
 }
 
