@@ -27,6 +27,174 @@ use tracing::warn;
 
 use crate::encoding::hex_encode;
 
+/// 密码强度验证 (#92):
+/// - 至少 12 字符 (与 CLAUDE.md 一致, 旧的 startup-side `MIN_LENGTH=8` 已废弃)
+/// - 最长 128 字符, 防止 DoS 式的极长密码触发昂贵的哈希计算
+/// - 必须同时包含大写、小写、数字、特殊字符
+/// - 拒绝常见弱密码 (top-100 字典 + 字母数字归一化匹配)
+///
+/// 启动期 (`READONLY_PASSWORD` 环境变量) 和管理后台改密 API 都走这个函数,
+/// 避免两处规则漂移。返回 `&'static str` 是为了让两边都能直接展示给用户,
+/// 不依赖 `anyhow::Error` 的格式化。
+pub(crate) fn validate_password_strength(password: &str) -> Result<(), &'static str> {
+    const MIN_PASSWORD_CHARS: usize = 12;
+    const MAX_PASSWORD_CHARS: usize = 128;
+
+    if password.len() < MIN_PASSWORD_CHARS {
+        return Err("password must be at least 12 characters");
+    }
+    if password.chars().count() > MAX_PASSWORD_CHARS {
+        return Err("password must be at most 128 characters");
+    }
+
+    let has_upper = password.chars().any(|c| c.is_uppercase());
+    let has_lower = password.chars().any(|c| c.is_lowercase());
+    let has_digit = password.chars().any(|c| c.is_ascii_digit());
+    let has_special = password.chars().any(|c| !c.is_alphanumeric());
+
+    if !has_upper {
+        return Err("password must include at least one uppercase letter");
+    }
+    if !has_lower {
+        return Err("password must include at least one lowercase letter");
+    }
+    if !has_digit {
+        return Err("password must include at least one digit");
+    }
+    if !has_special {
+        return Err("password must include at least one special character");
+    }
+
+    if is_common_password(password) {
+        return Err("password is too common, please choose a stronger password");
+    }
+
+    Ok(())
+}
+
+/// 检查是否命中 top-100 弱密码字典(忽略大小写, 并对去除非字母数字后做归一化匹配)。
+fn is_common_password(password: &str) -> bool {
+    const COMMON_PASSWORDS: &[&str] = &[
+        "password",
+        "password1",
+        "password123",
+        "password12",
+        "password1234",
+        "123456",
+        "12345678",
+        "123456789",
+        "1234567890",
+        "qwerty",
+        "abc123",
+        "monkey",
+        "1234567",
+        "letmein",
+        "trustno1",
+        "dragon",
+        "baseball",
+        "iloveyou",
+        "master",
+        "sunshine",
+        "ashley",
+        "bailey",
+        "passw0rd",
+        "shadow",
+        "123123",
+        "654321",
+        "superman",
+        "qazwsx",
+        "michael",
+        "football",
+        "welcome",
+        "jesus",
+        "ninja",
+        "mustang",
+        "password!",
+        "admin",
+        "admin123",
+        "root",
+        "toor",
+        "pass",
+        "test",
+        "guest",
+        "info",
+        "adm",
+        "mysql",
+        "user",
+        "administrator",
+        "oracle",
+        "ftp",
+        "pi",
+        "puppet",
+        "ansible",
+        "ec2-user",
+        "vagrant",
+        "azureuser",
+        "changeme",
+        "changeme123",
+        "default",
+        "password@123",
+        "p@ssw0rd",
+        "p@ssword",
+        "passw0rd!",
+        "admin@123",
+        "root123",
+        "test123",
+        "demo",
+        "demo123",
+        "sample",
+        "temp",
+        "temp123",
+        "nodelite",
+        "monitor",
+        "monitoring",
+        "server",
+        "agent",
+        "qwerty123",
+        "abc123456",
+        "letmein123",
+        "welcome123",
+        "123qwe",
+        "qwe123",
+        "1q2w3e4r",
+        "1qaz2wsx",
+        "zxcvbnm",
+        "asdfgh",
+        "qwertyuiop",
+        "1234qwer",
+        "qwer1234",
+        "abcd1234",
+        "password1!",
+        "password123!",
+        "admin1234",
+        "root1234",
+        "pass1234",
+        "test1234",
+        "demo1234",
+        "temp1234",
+        "user1234",
+        "welcome1",
+        "admin123!@#",
+        "admin123!@#$",
+        "welcome123!@",
+    ];
+
+    let lower = password.to_lowercase();
+    if COMMON_PASSWORDS.contains(&lower.as_str()) {
+        return true;
+    }
+
+    let alphanumeric: String = lower.chars().filter(|c| c.is_alphanumeric()).collect();
+    for common in COMMON_PASSWORDS {
+        let common_alphanum: String = common.chars().filter(|c| c.is_alphanumeric()).collect();
+        if !common_alphanum.is_empty() && alphanumeric == common_alphanum {
+            return true;
+        }
+    }
+
+    false
+}
+
 /// Basic Auth 通过后等待输入 TOTP 的窗口。
 pub const TWO_FACTOR_PENDING_SECS: u64 = 300;
 /// 2FA 完成后的浏览器会话有效期。
@@ -407,5 +575,31 @@ mod tests {
             .create_pending()
             .expect("create replacement session");
         assert!(sessions.pending_exists(&replacement));
+    }
+
+    /// #92: 启动期与改密 API 必须用同一套规则,这里覆盖关键拒绝路径,
+    /// 以防未来有人单独动 startup.rs 或 helpers.rs 让两边漂移。
+    #[test]
+    fn validate_password_strength_enforces_unified_rules() {
+        // 11 字符 = 旧 startup 8 字符规则会放过, 新规则必须拒绝。
+        assert_eq!(
+            validate_password_strength("Aa1!short89"),
+            Err("password must be at least 12 characters")
+        );
+
+        // 缺少特殊字符 = 旧 startup 只 warn 不拒绝, 新规则必须返回 Err。
+        assert_eq!(
+            validate_password_strength("OnlyAlnum2024"),
+            Err("password must include at least one special character")
+        );
+
+        // 完整满足规则的强密码应当通过。
+        assert!(validate_password_strength("Str0ng#Passphrase!").is_ok());
+
+        // 弱密码字典命中, 即便满足复杂度也要被拒。
+        assert_eq!(
+            validate_password_strength("Password123!"),
+            Err("password is too common, please choose a stronger password")
+        );
     }
 }

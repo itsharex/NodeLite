@@ -96,7 +96,13 @@ impl std::fmt::Display for ConfigError {
 impl std::error::Error for ConfigError {}
 
 /// Server 启动需要的全部配置。
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+///
+/// #98: **故意不派生 `Serialize`**。`ServerConfig` 持有 `readonly_auth.password`
+/// 与 `readonly_auth.totp_secret`,如果允许把整个结构直接序列化(`Json(config)`
+/// / `serde_json::to_string(&config)`),任何一处疏忽就会让明文凭证泄露到响应、
+/// 日志或调试输出。需要对外暴露字段时,请在 handler 内手工构造一个不带敏感字段
+/// 的视图类型(参考 `handlers/settings/mod.rs::SettingsResponse`)。
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct ServerConfig {
     pub listen: SocketAddr,
     pub public_base_url: String,
@@ -131,7 +137,14 @@ pub struct ServerConfig {
 }
 
 /// 前端只读访问所用的基本认证凭证。
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+///
+/// #98: **故意不派生 `Serialize`**。`password` / `totp_secret` 是高敏字段,
+/// 任何序列化路径(调试 `Json(auth_config)`、错误响应里 fmt-debug、
+/// 自动派生 of 上层包装类型)都会直接泄露明文凭证。如果某个 handler 真的需要
+/// 对前端公开一些非敏感子集(比如 username + enable_2fa),请显式定义一个视图
+/// 结构 (`pub struct AuthPublicView { username: String, enable_2fa: bool }`)
+/// 并只把它派生 `Serialize`。
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct ReadonlyAuthConfig {
     pub username: String,
     pub password: String,
