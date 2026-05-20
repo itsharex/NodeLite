@@ -3,6 +3,7 @@
 //! 这里保留共享类型与导出,把读路径、认证变更、更新相关流程拆到独立子模块,
 //! 避免继续膨胀成一个数百行的 monolith。
 
+mod config_edit;
 mod helpers;
 mod query;
 mod security;
@@ -15,11 +16,11 @@ pub(crate) use security::{
 };
 pub(crate) use updates::{refresh_node_token, server_update_log, start_server_update};
 
+use config_edit::{persist_auth_2fa_change, persist_auth_password_change};
 use helpers::{
-    generate_totp_secret, otpauth_uri, persist_auth_2fa_change, persist_auth_password_change,
-    server_build_version, server_update_cache_dir, server_update_log_path,
-    server_update_shell_command, server_update_writable_paths, settings_json_error,
-    validate_password_for_settings,
+    generate_totp_secret, otpauth_uri, server_build_version, server_update_cache_dir,
+    server_update_log_path, server_update_shell_command, server_update_writable_paths,
+    settings_json_error, validate_password_for_settings,
 };
 use types::{
     ChangePasswordRequest, DisableTwoFactorRequest, EnableTwoFactorRequest,
