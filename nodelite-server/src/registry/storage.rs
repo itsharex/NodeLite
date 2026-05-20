@@ -2,6 +2,7 @@ use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use chrono::Utc;
 use tokio::fs;
@@ -15,6 +16,8 @@ use super::{RegistryError, RegistryFile, RegistryResult, RegistryState};
 #[cfg(unix)]
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
+const MAX_REGISTRY_WRITE_RETRIES: usize = 32;
+
 pub(super) async fn load_registry_state(path: &Path) -> RegistryResult<RegistryState> {
     let mut file = load_registry_file(path).await?;
     prune_expired_install_sessions(&mut file, Utc::now());
@@ -23,6 +26,7 @@ pub(super) async fn load_registry_state(path: &Path) -> RegistryResult<RegistryS
     // 立即落盘, 之后磁盘上不再有任何节点的明文。
     let migrated = migrate_legacy_tokens(&mut file)?;
     if migrated {
+        file.version = file.version.saturating_add(1);
         let path_buf = path.to_path_buf();
         let file_clone = file.clone();
         tokio::task::spawn_blocking(move || save_registry_file_sync(&path_buf, &file_clone))
@@ -99,13 +103,7 @@ pub(super) fn load_registry_state_from_file(
 fn save_registry_file_sync(path: &Path, file: &RegistryFile) -> RegistryResult<()> {
     validate_registry_file(path, file)?;
 
-    if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        create_private_dir_all(parent).map_err(|error| {
-            RegistryError::internal("failed to create registry directory", error)
-        })?;
-    }
+    ensure_registry_parent_dir(path)?;
 
     let payload = serde_json::to_string_pretty(file).map_err(RegistryError::serialize)?;
     let tmp_path = temporary_registry_path(path)?;
@@ -120,29 +118,87 @@ fn save_registry_file_sync(path: &Path, file: &RegistryFile) -> RegistryResult<(
     Ok(())
 }
 
-/// 在 `spawn_blocking` 中以"读 → 改 → 写"的方式更新注册表文件,并由 flock 保护互斥。
+/// 在 `spawn_blocking` 中以"无锁准备 → 版本校验 → 原子替换"的方式更新注册表文件。
+///
+/// 重的 JSON 解析 / 序列化 / tmp 文件写入都发生在锁外; 独占 flock 只覆盖
+/// "确认 registry 版本未变化 + rename 提交" 这一步。若发现版本冲突就丢弃
+/// 当前准备结果并基于最新文件重试。
 pub(super) async fn mutate_registry_file<T, F>(
     path: &Path,
     operation: F,
 ) -> RegistryResult<(T, RegistryFile)>
 where
     T: Send + 'static,
-    F: FnOnce(&mut RegistryFile) -> RegistryResult<(T, bool)> + Send + 'static,
+    F: Fn(&mut RegistryFile) -> RegistryResult<(T, bool)> + Send + Clone + 'static,
 {
     let path = path.to_path_buf();
     tokio::task::spawn_blocking(move || {
-        // 注册表的修改可能来自运行中的 Server,也可能来自一次性 CLI 命令,
-        // 所以在 read-modify-write 之前先拿到文件锁,保证串行化。
-        let _lock = acquire_registry_lock(&path)?;
-        let mut file = load_registry_file_sync(&path)?;
-        let (value, should_persist) = operation(&mut file)?;
-        if should_persist {
-            save_registry_file_sync(&path, &file)?;
+        ensure_registry_parent_dir(&path)?;
+        for _attempt in 0..MAX_REGISTRY_WRITE_RETRIES {
+            let mut file = load_registry_file_sync(&path)?;
+            let base_version = file.version;
+            let (value, should_persist) = operation(&mut file)?;
+            if !should_persist {
+                return Ok((value, file));
+            }
+
+            file.version = base_version.saturating_add(1);
+            validate_registry_file(&path, &file)?;
+
+            let tmp_path = temporary_registry_path(&path)?;
+            let payload = serde_json::to_string_pretty(&file).map_err(RegistryError::serialize)?;
+            write_registry_payload(&tmp_path, &payload)?;
+            harden_registry_permissions(&tmp_path)?;
+
+            match commit_prepared_registry_write(&path, base_version, &tmp_path) {
+                Ok(()) => return Ok((value, file)),
+                Err(RegistryError::VersionConflict { .. }) => {
+                    cleanup_temporary_registry_file(&tmp_path);
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                Err(error) => {
+                    cleanup_temporary_registry_file(&tmp_path);
+                    return Err(error);
+                }
+            }
         }
-        Ok((value, file))
+
+        Err(RegistryError::validation(format!(
+            "registry mutation exceeded {} optimistic write retries",
+            MAX_REGISTRY_WRITE_RETRIES
+        )))
     })
     .await
     .map_err(RegistryError::mutation_task)?
+}
+
+fn ensure_registry_parent_dir(path: &Path) -> RegistryResult<()> {
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        create_private_dir_all(parent)
+            .map_err(|error| RegistryError::internal("failed to create registry directory", error))?;
+    }
+    Ok(())
+}
+
+fn commit_prepared_registry_write(
+    path: &Path,
+    expected_version: u64,
+    tmp_path: &Path,
+) -> RegistryResult<()> {
+    let _lock = acquire_registry_lock(path)?;
+    let current = load_registry_file_sync(path)?;
+    if current.version != expected_version {
+        return Err(RegistryError::version_conflict(
+            expected_version,
+            current.version,
+        ));
+    }
+    std::fs::rename(tmp_path, path).map_err(|error| RegistryError::io("replacing", path, error))?;
+    sync_parent_dir(path);
+    verify_registry_permissions(path)?;
+    Ok(())
 }
 
 fn temporary_registry_path(path: &Path) -> RegistryResult<PathBuf> {
@@ -163,6 +219,10 @@ fn temporary_registry_path(path: &Path) -> RegistryResult<PathBuf> {
         .map(|byte| format!("{byte:02x}"))
         .collect::<String>();
     Ok(path.with_file_name(format!("{file_name}.tmp.{suffix_hex}")))
+}
+
+fn cleanup_temporary_registry_file(path: &Path) {
+    let _ = std::fs::remove_file(path);
 }
 
 fn write_registry_payload(path: &Path, payload: &str) -> RegistryResult<()> {

@@ -65,6 +65,7 @@ fn registry_authorizes_per_node_token_and_overrides_metadata() {
         let mut node = legacy_node("osaka-01", "Osaka 01", "secret", None);
         node.tags = vec!["edge".to_string()];
         let file = RegistryFile {
+            version: 0,
             nodes: vec![node],
             install_sessions: Vec::new(),
         };
@@ -112,6 +113,7 @@ fn load_hashes_legacy_plaintext_tokens_and_persists_migration() {
         std::fs::create_dir_all(&temp_dir).expect("temp dir should exist");
         let path = temp_dir.join("server.json");
         let file = RegistryFile {
+            version: 0,
             nodes: vec![legacy_node("legacy-01", "Legacy 01", "legacy-secret", None)],
             install_sessions: Vec::new(),
         };
@@ -136,6 +138,7 @@ fn load_hashes_legacy_plaintext_tokens_and_persists_migration() {
         assert!(parsed.nodes[0].token_hash.starts_with("$argon2id$"));
         assert!(verify_token("legacy-secret", &parsed.nodes[0].token_hash));
         assert_eq!(parsed.nodes[0].token_generation, 1);
+        assert_eq!(parsed.version, 1);
 
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_dir(&temp_dir);
@@ -168,6 +171,7 @@ fn issue_node_persists_registry_and_renders_install_command() {
         let stored = std::fs::read_to_string(&path).expect("registry should be stored");
         let parsed: RegistryFile =
             serde_json::from_str(&stored).expect("stored registry should parse");
+        assert_eq!(parsed.version, 1);
         assert_eq!(parsed.nodes.len(), 1);
         assert_eq!(parsed.install_sessions.len(), 1);
         assert!(parsed.nodes[0].token.is_empty());
@@ -433,6 +437,7 @@ fn expired_tokens_are_not_current_after_handshake() {
         std::fs::create_dir_all(&temp_dir).expect("temp dir should exist");
         let path = temp_dir.join("server.json");
         let file = RegistryFile {
+            version: 0,
             nodes: vec![legacy_node(
                 "expired-01",
                 "Expired 01",
@@ -536,6 +541,7 @@ fn wrong_tokens_use_the_same_auth_error() {
         std::fs::create_dir_all(&temp_dir).expect("temp dir should exist");
         let path = temp_dir.join("server.json");
         let file = RegistryFile {
+            version: 0,
             nodes: vec![legacy_node("osaka-01", "Osaka 01", "secret", None)],
             install_sessions: Vec::new(),
         };
@@ -712,7 +718,7 @@ async fn concurrent_issue_node_preserves_all_nodes() {
     std::fs::create_dir_all(&temp_dir).expect("temp dir");
     let path = temp_dir.join("server.json");
 
-    // 并发 issue 10 个不同节点,验证 flock + 唯一 tmp 文件名能保证全部落盘。
+    // 并发 issue 10 个不同节点,验证乐观版本提交 + 唯一 tmp 文件名能保证全部落盘。
     let mut handles = Vec::new();
     for i in 0..10 {
         let path = path.clone();
@@ -735,6 +741,8 @@ async fn concurrent_issue_node_preserves_all_nodes() {
     assert_eq!(results.len(), 10, "all tasks should complete");
 
     let registry = NodeRegistry::load(&path).await.expect("load");
+    let stored = std::fs::read_to_string(&path).expect("registry should be readable");
+    let parsed: RegistryFile = serde_json::from_str(&stored).expect("registry should parse");
     let node_ids: Vec<_> = registry
         .state
         .read()
@@ -748,6 +756,7 @@ async fn concurrent_issue_node_preserves_all_nodes() {
         10,
         "all 10 nodes should be present in registry"
     );
+    assert_eq!(parsed.version, 10, "each successful mutation should advance version");
 
     let _ = std::fs::remove_file(&path);
     let _ = std::fs::remove_dir(&temp_dir);

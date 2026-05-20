@@ -38,6 +38,10 @@ pub enum RegistryError {
     BackgroundTask {
         source: tokio::task::JoinError,
     },
+    VersionConflict {
+        expected_version: u64,
+        actual_version: u64,
+    },
     Internal {
         context: &'static str,
         source: anyhow::Error,
@@ -87,6 +91,13 @@ impl RegistryError {
         Self::BackgroundTask { source }
     }
 
+    pub fn version_conflict(expected_version: u64, actual_version: u64) -> Self {
+        Self::VersionConflict {
+            expected_version,
+            actual_version,
+        }
+    }
+
     pub fn internal(context: &'static str, source: anyhow::Error) -> Self {
         Self::Internal { context, source }
     }
@@ -121,6 +132,13 @@ impl fmt::Display for RegistryError {
             Self::Serialize { .. } => write!(f, "failed to serialize node registry"),
             Self::MutationTask { .. } => write!(f, "registry mutation task failed"),
             Self::BackgroundTask { .. } => write!(f, "registry background task failed"),
+            Self::VersionConflict {
+                expected_version,
+                actual_version,
+            } => write!(
+                f,
+                "registry version conflict (expected {expected_version}, found {actual_version})"
+            ),
             Self::Internal { context, .. } => write!(f, "{context}"),
         }
     }
@@ -134,6 +152,7 @@ impl std::error::Error for RegistryError {
             Self::Serialize { source } => Some(source),
             Self::MutationTask { source } => Some(source),
             Self::BackgroundTask { source } => Some(source),
+            Self::VersionConflict { .. } => None,
             Self::Internal { source, .. } => Some(source.root_cause()),
             Self::Unauthorized
             | Self::TokenExpired { .. }

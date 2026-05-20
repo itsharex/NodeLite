@@ -168,6 +168,8 @@ pub struct IssueNodeResult {
 #[serde(deny_unknown_fields)]
 struct RegistryFile {
     #[serde(default)]
+    version: u64,
+    #[serde(default)]
     nodes: Vec<RegisteredNode>,
     #[serde(default)]
     install_sessions: Vec<InstallSession>,
