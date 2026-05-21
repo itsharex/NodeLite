@@ -25,12 +25,16 @@ use nodelite_proto::{
     AgentLogsMessage, HelloMessage, MetricsMessage, PingMessage, PongMessage, ServerNoticeMessage,
     WIRE_PROTOCOL_VERSION, WireMessage,
 };
+use serde_json::json;
 use tokio::sync::mpsc;
 use tokio::time::{MissedTickBehavior, interval};
 use tracing::{error, info, warn};
 
 use crate::AppState;
-use crate::admission::{WsConnectionPermit, resolve_client_ip, ws_admission_error_response};
+use crate::admission::{
+    WsAdmissionError, WsConnectionPermit, resolve_client_ip, ws_admission_error_response,
+};
+use crate::audit::{AuditEventType, NewAuditEvent};
 use crate::registry::{NodeRegistry, RegistryError};
 use crate::sanitize::{
     METRIC_ANOMALY_SESSION_LIMIT, METRIC_ANOMALY_WINDOW_SECS, sanitize_snapshot,
@@ -113,14 +117,26 @@ pub async fn ws_handler(
 ) -> Response {
     let max_message_bytes = state.shared.config().max_message_bytes;
     let client_ip = resolve_client_ip(state.shared.config().listen, peer_addr, &headers);
+    let audit_user_agent = header_user_agent(&headers);
     let connection_permit = match state.ws_admission.try_acquire(client_ip) {
         Ok(permit) => permit,
-        Err(error) => return ws_admission_error_response(error),
+        Err(error) => {
+            maybe_record_ws_block(&state, &error, client_ip, audit_user_agent.clone()).await;
+            return ws_admission_error_response(error);
+        }
     };
     ws.max_frame_size(max_message_bytes)
         .max_message_size(max_message_bytes)
         .on_upgrade(move |socket| async move {
-            if let Err(error) = handle_socket(state, client_ip, connection_permit, socket).await {
+            if let Err(error) = handle_socket(
+                state,
+                client_ip,
+                audit_user_agent,
+                connection_permit,
+                socket,
+            )
+            .await
+            {
                 match error {
                     ProtocolError::Client(message) => {
                         warn!(reason = %message, "websocket client disconnected");
@@ -138,12 +154,14 @@ pub async fn ws_handler(
 async fn handle_socket(
     state: AppState,
     client_ip: IpAddr,
+    audit_user_agent: Option<String>,
     _connection_permit: WsConnectionPermit,
     mut socket: WebSocket,
 ) -> Result<(), ProtocolError> {
     let shared = state.shared.clone();
     let hello = wait_for_hello_message(&state, client_ip, &mut socket).await?;
-    let authorized = authorize_hello(&state, client_ip, &mut socket, &hello).await?;
+    let authorized =
+        authorize_hello(&state, client_ip, &mut socket, &hello, audit_user_agent).await?;
     let identity = authorized.identity;
     let mut session = ActiveSession {
         node_id: identity.node_id.clone(),
@@ -209,6 +227,7 @@ async fn authorize_hello(
     client_ip: IpAddr,
     socket: &mut WebSocket,
     hello: &HelloMessage,
+    audit_user_agent: Option<String>,
 ) -> Result<crate::registry::AuthorizedNode, ProtocolError> {
     if hello.protocol_version != WIRE_PROTOCOL_VERSION {
         state.ws_admission.record_auth_failure(client_ip);
@@ -233,6 +252,14 @@ async fn authorize_hello(
     {
         Ok(authorized) => {
             state.ws_admission.clear_auth_failures(client_ip);
+            let mut event =
+                NewAuditEvent::now(AuditEventType::NodeConnected, client_ip.to_string(), true);
+            event.node_id = Some(authorized.identity.node_id.clone());
+            event.user_agent = audit_user_agent;
+            event.details = json!({
+                "protocol_version": hello.protocol_version,
+            });
+            state.audit_log.record_best_effort(event).await;
             Ok(authorized)
         }
         Err(error) => {
@@ -259,9 +286,47 @@ async fn authorize_hello(
                 message: notice_message.to_string(),
             });
             let _ = send_wire_message(socket, &notice).await;
+            let mut event =
+                NewAuditEvent::now(AuditEventType::TokenInvalid, client_ip.to_string(), false);
+            event.node_id = Some(hello.identity.node_id.clone());
+            event.user_agent = audit_user_agent;
+            event.details = json!({
+                "reason": error_label,
+            });
+            state.audit_log.record_best_effort(event).await;
             Err(ProtocolError::Client(error_label.to_string()))
         }
     }
+}
+
+async fn maybe_record_ws_block(
+    state: &AppState,
+    error: &WsAdmissionError,
+    client_ip: IpAddr,
+    user_agent: Option<String>,
+) {
+    let WsAdmissionError::Blocked { retry_after_secs } = error else {
+        return;
+    };
+    let mut event = NewAuditEvent::now(
+        AuditEventType::RateLimitExceeded,
+        client_ip.to_string(),
+        false,
+    );
+    event.user_agent = user_agent;
+    event.details = json!({
+        "endpoint": "/ws",
+        "retry_after_secs": retry_after_secs,
+        "reason": "websocket_auth_block",
+    });
+    state.audit_log.record_best_effort(event).await;
+}
+
+fn header_user_agent(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get(axum::http::header::USER_AGENT)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string)
 }
 
 async fn run_authenticated_session(
