@@ -256,6 +256,14 @@ impl AuditLog {
         }
     }
 
+    pub(crate) fn dropped_writes(&self) -> u64 {
+        self.dropped_writes.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn write_failures(&self) -> u64 {
+        self.write_failures.load(Ordering::Relaxed)
+    }
+
     pub async fn query(&self, query: AuditQuery) -> Result<Vec<AuditEvent>, AuditLogError> {
         if !self.config.enabled {
             return Err(AuditLogError::Disabled);

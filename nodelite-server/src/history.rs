@@ -182,10 +182,6 @@ impl HistoryStore {
 
     /// 统计有多少次 record_status 因为 channel 满而被静默丢弃。
     /// 监控接入后,这个计数应当长期保持在 0;持续非零表示 batch 速率跟不上上报速率。
-    ///
-    /// 目前仅在 unit test 内使用。一旦 #91 (Prometheus exporter 改造) 落地,
-    /// 这个值会作为 `nodelite_history_dropped_writes_total` 暴露出去。
-    #[allow(dead_code)]
     pub fn dropped_writes(&self) -> u64 {
         self.dropped_writes.load(Ordering::Relaxed)
     }
