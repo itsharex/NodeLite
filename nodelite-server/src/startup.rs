@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
 use axum::Router;
-use axum::extract::Request;
+use axum::extract::{DefaultBodyLimit, Request};
 use axum::http::{HeaderValue, header};
 use axum::middleware::{Next, from_fn, from_fn_with_state};
 use axum::response::Response;
@@ -49,6 +49,7 @@ pub(crate) const PROTECTED_CONTENT_SECURITY_POLICY: &str = "default-src 'self'; 
      object-src 'none'; media-src 'none'; worker-src 'none'; base-uri 'none'; frame-ancestors 'none'; \
      form-action 'self'";
 pub(crate) const PROTECTED_CACHE_CONTROL: &str = "no-store, no-cache, must-revalidate";
+pub(crate) const JSON_WRITE_BODY_LIMIT_BYTES: usize = 16 * 1024;
 
 /// 启动 Web 服务:加载配置 → 初始化各子系统 → 注册路由 → 监听端口。
 pub(crate) async fn run_server(config_path: &Path) -> Result<()> {
@@ -144,48 +145,7 @@ pub(crate) async fn run_server(config_path: &Path) -> Result<()> {
     let shared_for_shutdown = state.shared.clone();
     let history_for_shutdown = state.history.clone();
     let snapshot_path = config.snapshot_path.clone();
-    let public_routes = Router::new()
-        .route("/healthz", get(healthz))
-        .route("/readyz", get(readyz))
-        .route("/logout-and-reauth", get(logout_and_reauth))
-        .route("/verify-2fa", get(verify_2fa_page))
-        .route("/api/verify-2fa", post(verify_2fa_api))
-        .route("/install/install-agent.sh", get(install_agent_script))
-        .route("/install/bootstrap", get(install_bootstrap))
-        .route("/ws", get(ws_handler))
-        .route_layer(from_fn(set_protected_response_headers));
-    let protected_routes = Router::new()
-        .route("/", get(index))
-        .route("/nodes/{node_id}", get(node_detail))
-        .route("/assets/brand-logo-dark.webp", get(brand_logo_dark_asset))
-        .route("/assets/brand-logo-light.webp", get(brand_logo_light_asset))
-        .route("/assets/ui-i18n.json", get(ui_i18n_asset))
-        .route("/api/bootstrap", get(bootstrap))
-        .route("/api/overview", get(overview))
-        .route("/metrics", get(metrics))
-        .route("/api/nodes", get(nodes))
-        .route("/api/nodes/{node_id}", get(node_status))
-        .route("/api/nodes/{node_id}/history", get(node_history))
-        .route("/api/nodes/{node_id}/logs", get(node_logs))
-        .route("/api/audit-log", get(audit_log))
-        .route(
-            "/api/nodes/{node_id}/refresh-token",
-            post(refresh_node_token),
-        )
-        .route("/api/settings", get(settings))
-        .route("/api/settings/password", post(change_readonly_password))
-        .route("/api/settings/update/server", post(start_server_update))
-        .route("/api/settings/update/server/log", get(server_update_log))
-        .route("/api/settings/2fa/start", post(start_two_factor_setup))
-        .route("/api/settings/2fa/enable", post(enable_two_factor))
-        .route("/api/settings/2fa/disable", post(disable_two_factor))
-        .route_layer(from_fn(set_protected_response_headers))
-        .route_layer(from_fn_with_state(state.clone(), require_readonly_auth));
-    let app = Router::new()
-        .merge(public_routes)
-        .merge(protected_routes)
-        .with_state(state)
-        .layer(TraceLayer::new_for_http());
+    let app = build_router(state);
 
     let listener = TcpListener::bind(listen_addr)
         .await
@@ -245,6 +205,58 @@ pub(crate) async fn run_server(config_path: &Path) -> Result<()> {
 
     info!("nodelite server shutdown complete");
     Ok(())
+}
+
+pub(crate) fn build_router(state: AppState) -> Router {
+    let public_routes = Router::new()
+        .route("/healthz", get(healthz))
+        .route("/readyz", get(readyz))
+        .route("/logout-and-reauth", get(logout_and_reauth))
+        .route("/verify-2fa", get(verify_2fa_page))
+        .merge(
+            Router::new()
+                .route("/api/verify-2fa", post(verify_2fa_api))
+                .layer(DefaultBodyLimit::max(JSON_WRITE_BODY_LIMIT_BYTES)),
+        )
+        .route("/install/install-agent.sh", get(install_agent_script))
+        .route("/install/bootstrap", get(install_bootstrap))
+        .route("/ws", get(ws_handler))
+        .route_layer(from_fn(set_protected_response_headers));
+    let protected_json_routes = Router::new()
+        .route(
+            "/api/nodes/{node_id}/refresh-token",
+            post(refresh_node_token),
+        )
+        .route("/api/settings/password", post(change_readonly_password))
+        .route("/api/settings/update/server", post(start_server_update))
+        .route("/api/settings/2fa/enable", post(enable_two_factor))
+        .route("/api/settings/2fa/disable", post(disable_two_factor))
+        .layer(DefaultBodyLimit::max(JSON_WRITE_BODY_LIMIT_BYTES));
+    let protected_routes = Router::new()
+        .route("/", get(index))
+        .route("/nodes/{node_id}", get(node_detail))
+        .route("/assets/brand-logo-dark.webp", get(brand_logo_dark_asset))
+        .route("/assets/brand-logo-light.webp", get(brand_logo_light_asset))
+        .route("/assets/ui-i18n.json", get(ui_i18n_asset))
+        .route("/api/bootstrap", get(bootstrap))
+        .route("/api/overview", get(overview))
+        .route("/metrics", get(metrics))
+        .route("/api/nodes", get(nodes))
+        .route("/api/nodes/{node_id}", get(node_status))
+        .route("/api/nodes/{node_id}/history", get(node_history))
+        .route("/api/nodes/{node_id}/logs", get(node_logs))
+        .route("/api/audit-log", get(audit_log))
+        .route("/api/settings", get(settings))
+        .route("/api/settings/update/server/log", get(server_update_log))
+        .route("/api/settings/2fa/start", post(start_two_factor_setup))
+        .merge(protected_json_routes)
+        .route_layer(from_fn(set_protected_response_headers))
+        .route_layer(from_fn_with_state(state.clone(), require_readonly_auth));
+    Router::new()
+        .merge(public_routes)
+        .merge(protected_routes)
+        .with_state(state)
+        .layer(TraceLayer::new_for_http())
 }
 
 /// 统一给受保护的 UI / API 响应补齐安全头,避免每个 handler 重复手写。

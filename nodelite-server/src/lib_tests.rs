@@ -444,6 +444,68 @@ fn public_auth_routes_attach_security_headers() {
 }
 
 #[test]
+fn json_write_routes_reject_oversized_bodies() {
+    let runtime = Runtime::new().expect("runtime should build");
+    runtime.block_on(async {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be monotonic enough")
+            .as_nanos();
+        let temp_dir = std::env::temp_dir().join(format!("nodelite-json-limit-test-{unique}"));
+        std::fs::create_dir_all(&temp_dir).expect("temp dir should exist");
+        let registry_path = temp_dir.join("server.json");
+        let config = test_server_config(
+            SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 8080)),
+            "https://monitor.example.com".to_string(),
+            registry_path,
+            temp_dir.join("history.sqlite3"),
+            temp_dir.join("snapshot.json"),
+        );
+        let state = AppState::test_fixture(config.into(), Arc::new(temp_dir.join("server.toml")))
+            .await
+            .expect("state fixture should build");
+        let app = crate::startup::build_router(state);
+
+        let oversized_body = format!(
+            "{{\"blob\":\"{}\"}}",
+            "x".repeat(crate::startup::JSON_WRITE_BODY_LIMIT_BYTES + 1)
+        );
+        for (uri, auth_header) in json_write_routes() {
+            let response = app
+                .clone()
+                .oneshot(json_request(
+                    "POST",
+                    uri,
+                    auth_header,
+                    oversized_body.clone(),
+                ))
+                .await
+                .expect("response should be produced");
+            assert_eq!(
+                response.status(),
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "{uri} should reject oversized JSON bodies",
+            );
+        }
+
+        for (uri, auth_header, body) in small_json_write_requests() {
+            let response = app
+                .clone()
+                .oneshot(json_request("POST", uri, auth_header, body))
+                .await
+                .expect("response should be produced");
+            assert_ne!(
+                response.status(),
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "{uri} should still accept normal-sized JSON bodies",
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    });
+}
+
+#[test]
 fn readonly_auth_route_accepts_valid_basic_auth() {
     let runtime = Runtime::new().expect("runtime should build");
     runtime.block_on(async {
@@ -1293,6 +1355,74 @@ fn protected_request(
     let mut request = builder.body(Body::empty()).expect("request should build");
     request.extensions_mut().insert(ConnectInfo(peer_addr));
     request
+}
+
+fn json_request(
+    method: &str,
+    uri: &str,
+    auth_header: Option<&str>,
+    body: impl Into<Body>,
+) -> Request<Body> {
+    let mut builder = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header(header::CONTENT_TYPE, "application/json");
+    if let Some(auth_header) = auth_header {
+        builder = builder.header(header::AUTHORIZATION, auth_header);
+    }
+    let mut request = builder.body(body.into()).expect("request should build");
+    request
+        .extensions_mut()
+        .insert(ConnectInfo(SocketAddr::V4(SocketAddrV4::new(
+            Ipv4Addr::LOCALHOST,
+            51234,
+        ))));
+    request
+}
+
+fn json_write_routes() -> [(&'static str, Option<&'static str>); 6] {
+    [
+        ("/api/verify-2fa", None),
+        (
+            "/api/nodes/test-node/refresh-token",
+            Some(TEST_BASIC_AUTH_HEADER),
+        ),
+        ("/api/settings/password", Some(TEST_BASIC_AUTH_HEADER)),
+        ("/api/settings/update/server", Some(TEST_BASIC_AUTH_HEADER)),
+        ("/api/settings/2fa/enable", Some(TEST_BASIC_AUTH_HEADER)),
+        ("/api/settings/2fa/disable", Some(TEST_BASIC_AUTH_HEADER)),
+    ]
+}
+
+fn small_json_write_requests() -> [(&'static str, Option<&'static str>, &'static str); 6] {
+    [
+        ("/api/verify-2fa", None, r#"{"code":"000000"}"#),
+        (
+            "/api/nodes/test-node/refresh-token",
+            Some(TEST_BASIC_AUTH_HEADER),
+            r#"{"current_password":"wrong"}"#,
+        ),
+        (
+            "/api/settings/password",
+            Some(TEST_BASIC_AUTH_HEADER),
+            r#"{"current_password":"wrong","new_password":"new-secret-password"}"#,
+        ),
+        (
+            "/api/settings/update/server",
+            Some(TEST_BASIC_AUTH_HEADER),
+            r#"{"current_password":"wrong"}"#,
+        ),
+        (
+            "/api/settings/2fa/enable",
+            Some(TEST_BASIC_AUTH_HEADER),
+            r#"{"current_password":"wrong","secret":"JBSWY3DPEHPK3PXP","code":"000000"}"#,
+        ),
+        (
+            "/api/settings/2fa/disable",
+            Some(TEST_BASIC_AUTH_HEADER),
+            r#"{"current_password":"wrong","code":"000000"}"#,
+        ),
+    ]
 }
 
 #[test]
