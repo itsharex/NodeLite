@@ -36,6 +36,8 @@ pub struct SharedState {
     next_session_id: Arc<AtomicU64>,
     view_revision: Arc<AtomicU64>,
     view_cache: Arc<Mutex<ViewCache>>,
+    api_cache_build_lock: Arc<Mutex<()>>,
+    metrics_cache_build_lock: Arc<Mutex<()>>,
     #[cfg(test)]
     api_cache_builds: Arc<AtomicU64>,
     #[cfg(test)]
@@ -50,6 +52,8 @@ impl SharedState {
             next_session_id: Arc::new(AtomicU64::new(1)),
             view_revision: Arc::new(AtomicU64::new(1)),
             view_cache: Arc::new(Mutex::new(ViewCache::default())),
+            api_cache_build_lock: Arc::new(Mutex::new(())),
+            metrics_cache_build_lock: Arc::new(Mutex::new(())),
             #[cfg(test)]
             api_cache_builds: Arc::new(AtomicU64::new(0)),
             #[cfg(test)]
@@ -185,9 +189,21 @@ impl SharedState {
         let readiness_snapshot = ReadinessSnapshot::capture(readiness);
         let max_age = Duration::from_secs(self.config.refresh_interval_secs.max(1));
 
-        let mut cache = self.view_cache.lock().await;
-        if let Some(body) = cache.metrics_body(revision, readiness_snapshot, max_age) {
-            return body;
+        {
+            let cache = self.view_cache.lock().await;
+            if let Some(body) = cache.metrics_body(revision, readiness_snapshot, max_age) {
+                return body;
+            }
+        }
+
+        let _build_guard = self.metrics_cache_build_lock.lock().await;
+        let revision = self.view_revision.load(Ordering::Acquire);
+        let readiness_snapshot = ReadinessSnapshot::capture(readiness);
+        {
+            let cache = self.view_cache.lock().await;
+            if let Some(body) = cache.metrics_body(revision, readiness_snapshot, max_age) {
+                return body;
+            }
         }
 
         #[cfg(test)]
@@ -197,6 +213,7 @@ impl SharedState {
         let body = Bytes::from(render_prometheus_metrics(readiness, &statuses, &overview));
 
         if self.view_revision.load(Ordering::Acquire) == revision {
+            let mut cache = self.view_cache.lock().await;
             cache.store_metrics_body(revision, readiness_snapshot, body.clone());
         }
 
@@ -224,16 +241,25 @@ impl SharedState {
 
     async fn cached_api_json_bytes(&self, kind: ApiBodyKind) -> Result<Bytes, serde_json::Error> {
         let revision = self.view_revision.load(Ordering::Acquire);
-        let mut cache = self.view_cache.lock().await;
-        if let Some(body) = cache.api_body(revision, kind) {
-            return Ok(body);
+        {
+            let cache = self.view_cache.lock().await;
+            if let Some(body) = cache.api_body(revision, kind) {
+                return Ok(body);
+            }
+        }
+
+        let _build_guard = self.api_cache_build_lock.lock().await;
+        let revision = self.view_revision.load(Ordering::Acquire);
+        {
+            let cache = self.view_cache.lock().await;
+            if let Some(body) = cache.api_body(revision, kind) {
+                return Ok(body);
+            }
         }
 
         #[cfg(test)]
         self.api_cache_builds.fetch_add(1, Ordering::Relaxed);
 
-        // 故意在缓存锁持有期间完成 clone + serialize,这样同一 revision 下的
-        // 并发 miss 只能有一个任务做昂贵工作,其余请求直接等待命中的结果。
         let (statuses, overview) = self.statuses_and_overview().await;
         let nodes_body = Bytes::from(serde_json::to_vec(&statuses)?);
         let overview_body = Bytes::from(serde_json::to_vec(&overview)?);
@@ -244,6 +270,7 @@ impl SharedState {
         };
 
         if self.view_revision.load(Ordering::Acquire) == revision {
+            let mut cache = self.view_cache.lock().await;
             cache.store_api_bodies(revision, nodes_body, overview_body);
         }
 
