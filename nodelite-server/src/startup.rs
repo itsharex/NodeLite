@@ -144,6 +144,16 @@ pub(crate) async fn run_server(config_path: &Path) -> Result<()> {
     let shared_for_shutdown = state.shared.clone();
     let history_for_shutdown = state.history.clone();
     let snapshot_path = config.snapshot_path.clone();
+    let public_routes = Router::new()
+        .route("/healthz", get(healthz))
+        .route("/readyz", get(readyz))
+        .route("/logout-and-reauth", get(logout_and_reauth))
+        .route("/verify-2fa", get(verify_2fa_page))
+        .route("/api/verify-2fa", post(verify_2fa_api))
+        .route("/install/install-agent.sh", get(install_agent_script))
+        .route("/install/bootstrap", get(install_bootstrap))
+        .route("/ws", get(ws_handler))
+        .route_layer(from_fn(set_protected_response_headers));
     let protected_routes = Router::new()
         .route("/", get(index))
         .route("/nodes/{node_id}", get(node_detail))
@@ -172,14 +182,7 @@ pub(crate) async fn run_server(config_path: &Path) -> Result<()> {
         .route_layer(from_fn(set_protected_response_headers))
         .route_layer(from_fn_with_state(state.clone(), require_readonly_auth));
     let app = Router::new()
-        .route("/healthz", get(healthz))
-        .route("/readyz", get(readyz))
-        .route("/logout-and-reauth", get(logout_and_reauth))
-        .route("/verify-2fa", get(verify_2fa_page))
-        .route("/api/verify-2fa", post(verify_2fa_api))
-        .route("/install/install-agent.sh", get(install_agent_script))
-        .route("/install/bootstrap", get(install_bootstrap))
-        .route("/ws", get(ws_handler))
+        .merge(public_routes)
         .merge(protected_routes)
         .with_state(state)
         .layer(TraceLayer::new_for_http());

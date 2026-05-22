@@ -27,9 +27,9 @@ use crate::audit::{AuditEvent, AuditEventType, AuditQuery, NewAuditEvent};
 use crate::auth::{ReadonlyRouteAuth, TwoFactorSessions};
 use crate::handlers::{
     audit_log, bootstrap, brand_logo_dark_asset, brand_logo_light_asset, healthz, index,
-    install_agent_script, install_bootstrap, is_well_formed_install_token, node_detail,
-    node_history, node_logs, node_status, nodes, overview, readyz, require_readonly_auth,
-    ui_i18n_asset,
+    install_agent_script, install_bootstrap, is_well_formed_install_token, logout_and_reauth,
+    node_detail, node_history, node_logs, node_status, nodes, overview, readyz,
+    require_readonly_auth, ui_i18n_asset, verify_2fa_page,
 };
 use crate::registry::{IssueNodeRequest, issue_node};
 use crate::sanitize::{
@@ -38,7 +38,7 @@ use crate::sanitize::{
     sanitize_snapshot, should_disconnect_for_metric_anomalies, update_metric_anomaly_window,
 };
 use crate::test_support::{TEST_BASIC_AUTH_HEADER, test_server_config, test_ws_config};
-use crate::ui::index_page_csp;
+use crate::ui::{index_page_csp, verify_2fa_page_csp};
 use crate::ws::ws_handler;
 use nodelite_proto::{NodeSnapshot, ServerConfig, WsConfig};
 use tower_http::trace::TraceLayer;
@@ -345,24 +345,99 @@ fn protected_routes_attach_security_headers() {
             response.headers().get(header::CONTENT_SECURITY_POLICY),
             Some(&header::HeaderValue::from_static(index_page_csp(),)),
         );
-        assert_eq!(
-            response.headers().get(header::X_CONTENT_TYPE_OPTIONS),
-            Some(&header::HeaderValue::from_static("nosniff")),
+        assert_security_headers(response.headers());
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    });
+}
+
+fn assert_security_headers(headers: &HeaderMap) {
+    assert_eq!(
+        headers.get(header::X_CONTENT_TYPE_OPTIONS),
+        Some(&header::HeaderValue::from_static("nosniff")),
+    );
+    assert_eq!(
+        headers.get(header::REFERRER_POLICY),
+        Some(&header::HeaderValue::from_static(
+            "strict-origin-when-cross-origin",
+        )),
+    );
+    assert_eq!(
+        headers.get(header::CACHE_CONTROL),
+        Some(&header::HeaderValue::from_static(PROTECTED_CACHE_CONTROL,)),
+    );
+    assert_eq!(
+        headers.get(header::PRAGMA),
+        Some(&header::HeaderValue::from_static("no-cache")),
+    );
+}
+
+#[test]
+fn public_auth_routes_attach_security_headers() {
+    let runtime = Runtime::new().expect("runtime should build");
+    runtime.block_on(async {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be monotonic enough")
+            .as_nanos();
+        let temp_dir = std::env::temp_dir().join(format!("nodelite-public-header-test-{unique}"));
+        std::fs::create_dir_all(&temp_dir).expect("temp dir should exist");
+        let registry_path = temp_dir.join("server.json");
+        let mut config = test_server_config(
+            SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 8080)),
+            "https://monitor.example.com".to_string(),
+            registry_path,
+            temp_dir.join("history.sqlite3"),
+            temp_dir.join("snapshot.json"),
         );
+        config.ws = test_ws_config(32, 8);
+        let state = AppState::test_fixture(config.into(), Arc::new(temp_dir.join("server.toml")))
+            .await
+            .expect("state fixture should build");
+        let app: Router = Router::new()
+            .route("/verify-2fa", get(verify_2fa_page))
+            .route("/logout-and-reauth", get(logout_and_reauth))
+            .route_layer(from_fn(set_protected_response_headers))
+            .with_state(state);
+
+        let verify_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/verify-2fa")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("response should be produced");
+        assert_eq!(verify_response.status(), StatusCode::OK);
         assert_eq!(
-            response.headers().get(header::REFERRER_POLICY),
+            verify_response
+                .headers()
+                .get(header::CONTENT_SECURITY_POLICY),
+            Some(&header::HeaderValue::from_static(verify_2fa_page_csp(),)),
+        );
+        assert_security_headers(verify_response.headers());
+
+        let reauth_response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/logout-and-reauth")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("response should be produced");
+        assert_eq!(reauth_response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            reauth_response
+                .headers()
+                .get(header::CONTENT_SECURITY_POLICY),
             Some(&header::HeaderValue::from_static(
-                "strict-origin-when-cross-origin",
+                crate::startup::PROTECTED_CONTENT_SECURITY_POLICY,
             )),
         );
-        assert_eq!(
-            response.headers().get(header::CACHE_CONTROL),
-            Some(&header::HeaderValue::from_static(PROTECTED_CACHE_CONTROL,)),
-        );
-        assert_eq!(
-            response.headers().get(header::PRAGMA),
-            Some(&header::HeaderValue::from_static("no-cache")),
-        );
+        assert_security_headers(reauth_response.headers());
 
         let _ = std::fs::remove_dir_all(&temp_dir);
     });
