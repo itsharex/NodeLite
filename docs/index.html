@@ -364,13 +364,19 @@
         grid-template-columns: repeat(2, minmax(0, 1fr));
       }
       .card-icon {
-        width: 36px;
-        height: 36px;
-        border-radius: 10px;
+        width: 40px;
+        height: 40px;
+        border-radius: 12px;
         display: grid;
         place-items: center;
         flex-shrink: 0;
         font-size: 16px;
+        padding: 10px;
+      }
+      .card-icon svg {
+        width: 20px;
+        height: 20px;
+        display: block;
       }
       .card-icon.blue { background: var(--accent-blue-soft); color: var(--accent-blue); }
       .card-icon.green { background: var(--accent-green-soft); color: var(--accent-green); }
