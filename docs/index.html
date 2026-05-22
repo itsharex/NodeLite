@@ -1378,18 +1378,21 @@ curl -u viewer:secret 'https://monitor.example.com/api/audit-log?event_type=logi
 
             <div class="faq-item">
               <button class="faq-q" type="button" aria-expanded="false">
-                <h4 class="faq-q-text">服务器内存占用很低，真的靠谱吗</h4>
+                <h4 class="faq-q-text">服务端和 Agent 的内存占用该怎么理解</h4>
                 <svg class="faq-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
               </button>
               <div class="faq-a" hidden>
                 <div class="faq-a-inner">
-                  <p>NodeLite 基于 Rust 编写，零成本抽象和高效内存管理使其资源占用极低：</p>
+                  <p><code>800-1000 KB</code> 只能看作 Agent 的冷启动基线，不应该理解成长时间运行后的固定占用。</p>
                   <ul>
                     <li><strong>服务端</strong>：4-10 MB 内存</li>
-                    <li><strong>Agent</strong>：800-1000 KB 内存</li>
+                    <li><strong>Agent 冷启动</strong>：约 800 KB</li>
+                    <li><strong>Agent 运行 24 小时后</strong>：约 1.2 MB</li>
+                    <li><strong>Agent 运行 72 小时后</strong>：约 3 MB</li>
                     <li><strong>200 节点并发</strong>：p95 延迟 &lt; 5ms，metrics 吞吐 18,677/s</li>
                   </ul>
-                  <p>实际表现受反向代理、SQLite I/O、历史保留时长等因素影响，但整体非常轻量。</p>
+                  <p>也就是说，当前版本的 Agent 常驻内存会随着运行时长增加而缓慢上升。这个现象已经在文档里明确标注，实际表现还会受到反向代理、SQLite I/O、历史保留时长和宿主机环境影响。</p>
+                  <p>如果你对常驻内存比较敏感，建议把这些数字当作实测参考值，而不是容量上限，并在自己的环境中持续观察 RSS 变化。</p>
                 </div>
               </div>
             </div>
