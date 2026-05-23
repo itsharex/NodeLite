@@ -172,7 +172,8 @@
 
       /* ---------- Main ---------- */
       .main {
-        padding: 36px clamp(28px, 4vw, 56px) 72px;
+        --main-inline-padding: clamp(28px, 4vw, 56px);
+        padding: 36px var(--main-inline-padding) 72px;
         max-width: none;
         width: 100%;
       }
@@ -368,6 +369,12 @@
         color: var(--text-muted);
         font-size: 14px;
         margin: 0 0 20px;
+      }
+      .section-wide {
+        width: min(1320px, calc(100vw - 248px - var(--main-inline-padding) - var(--main-inline-padding)));
+        max-width: calc(100vw - 248px - var(--main-inline-padding) - var(--main-inline-padding));
+        margin-left: 50%;
+        transform: translateX(-50%);
       }
 
       /* ---------- Cards ---------- */
@@ -641,6 +648,188 @@
         color: #15803d;
       }
 
+      /* ---------- Architecture ---------- */
+      .architecture-grid {
+        display: grid;
+        gap: 18px;
+      }
+      .arch-board {
+        background: #ffffff;
+        border: 1px solid var(--border-soft);
+        border-radius: 18px;
+        padding: 22px;
+        box-shadow: 0 8px 22px rgba(15, 23, 42, 0.04);
+        overflow: hidden;
+      }
+      .arch-board h3 {
+        margin: 0 0 6px;
+        font-size: 16px;
+        letter-spacing: -0.01em;
+      }
+      .arch-board > p {
+        margin: 0 0 16px;
+        color: var(--text-muted);
+        font-size: 13px;
+      }
+      .arch-lane {
+        min-width: 860px;
+        display: grid;
+        gap: 14px;
+      }
+      .arch-row {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 12px;
+        align-items: stretch;
+      }
+      .arch-row.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .arch-row.five { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+      .arch-node {
+        border: 1px solid var(--border-soft);
+        border-radius: 12px;
+        background: var(--bg-card-soft);
+        padding: 12px;
+        min-height: 92px;
+      }
+      .arch-node strong {
+        display: block;
+        color: var(--text-primary);
+        font-size: 13px;
+        margin-bottom: 6px;
+      }
+      .arch-node span,
+      .arch-node li {
+        color: var(--text-secondary);
+        font-size: 12px;
+        line-height: 1.55;
+      }
+      .arch-node ul {
+        margin: 0;
+        padding-left: 16px;
+      }
+      .arch-node.blue { background: var(--accent-blue-soft); border-color: rgba(59, 130, 246, 0.18); }
+      .arch-node.green { background: var(--accent-green-soft); border-color: rgba(34, 197, 94, 0.2); }
+      .arch-node.purple { background: var(--accent-purple-soft); border-color: rgba(168, 85, 247, 0.2); }
+      .arch-node.yellow { background: var(--accent-yellow-soft); border-color: rgba(234, 179, 8, 0.22); }
+      .arch-node.red { background: var(--accent-red-soft); border-color: rgba(239, 68, 68, 0.18); }
+      .arch-node.dark { background: #eef2f8; border-color: rgba(15, 23, 42, 0.12); }
+      .arch-arrow {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--text-muted);
+        font-size: 12px;
+        font-weight: 700;
+        min-height: 24px;
+      }
+      .arch-flow {
+        display: grid;
+        grid-template-columns: minmax(140px, 1fr) 34px minmax(140px, 1fr) 34px minmax(140px, 1fr) 34px minmax(140px, 1fr);
+        gap: 0;
+        align-items: center;
+      }
+      .arch-stack {
+        display: grid;
+        gap: 10px;
+      }
+      .arch-label {
+        display: inline-flex;
+        width: fit-content;
+        padding: 4px 8px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.72);
+        border: 1px solid var(--border-soft);
+        color: var(--text-muted);
+        font-size: 11px;
+        font-weight: 700;
+        margin-bottom: 4px;
+      }
+      .arch-sequence {
+        min-width: 860px;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 18px;
+        position: relative;
+      }
+      .arch-sequence::before {
+        content: "";
+        position: absolute;
+        left: 50%;
+        top: 36px;
+        bottom: 12px;
+        width: 1px;
+        background: var(--border-strong);
+      }
+      .sequence-col {
+        display: grid;
+        gap: 10px;
+      }
+      .sequence-head {
+        text-align: center;
+        font-weight: 700;
+        color: var(--text-primary);
+        font-size: 13px;
+      }
+      .sequence-step {
+        border: 1px solid var(--border-soft);
+        border-radius: 12px;
+        padding: 10px 12px;
+        background: var(--bg-card-soft);
+        color: var(--text-secondary);
+        font-size: 12px;
+        min-height: 42px;
+      }
+      .sequence-step.send { border-color: rgba(34, 197, 94, 0.28); background: rgba(34, 197, 94, 0.1); }
+      .sequence-step.recv { border-color: rgba(59, 130, 246, 0.24); background: rgba(59, 130, 246, 0.09); }
+      .arch-footnotes {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 10px;
+        margin-top: 14px;
+      }
+      .arch-footnotes span {
+        border: 1px solid var(--border-soft);
+        border-radius: 12px;
+        padding: 10px;
+        background: var(--bg-card-soft);
+        color: var(--text-muted);
+        font-size: 12px;
+      }
+      .arch-svg {
+        display: block;
+        width: 100%;
+        min-width: 0;
+        height: auto;
+        border-radius: 14px;
+        background: linear-gradient(180deg, #fbfdff 0%, #f8fafc 100%);
+      }
+      .arch-svg text {
+        font-family: "Inter", "PingFang SC", "Helvetica Neue", "Segoe UI", system-ui, -apple-system, sans-serif;
+        fill: var(--text-primary);
+      }
+      .arch-svg .small { font-size: 12px; fill: var(--text-muted); }
+      .arch-svg .label { font-size: 13px; font-weight: 700; }
+      .arch-svg .title { font-size: 17px; font-weight: 800; }
+      .arch-svg .tiny { font-size: 11px; fill: var(--text-muted); }
+      .arch-svg .small-center,
+      .arch-svg .tiny-center {
+        text-anchor: middle;
+      }
+      .arch-svg .small-center { font-size: 12px; fill: var(--text-muted); }
+      .arch-svg .tiny-center { font-size: 11px; fill: var(--text-muted); }
+      .arch-svg .boundary { fill: rgba(255, 255, 255, 0.64); stroke: rgba(15, 23, 42, 0.18); stroke-width: 1.5; stroke-dasharray: 8 6; }
+      .arch-svg .box-blue { fill: #eaf2ff; stroke: #9cc5ff; stroke-width: 1.4; }
+      .arch-svg .box-green { fill: #e9f9ef; stroke: #94e2ad; stroke-width: 1.4; }
+      .arch-svg .box-purple { fill: #f2e8ff; stroke: #d8b4fe; stroke-width: 1.4; }
+      .arch-svg .box-yellow { fill: #fff6db; stroke: #f4d17a; stroke-width: 1.4; }
+      .arch-svg .box-red { fill: #fff0f0; stroke: #fca5a5; stroke-width: 1.4; }
+      .arch-svg .box-gray { fill: #eef2f8; stroke: #cbd5e1; stroke-width: 1.4; }
+      .arch-svg .arrow { stroke: #334155; stroke-width: 2.2; fill: none; }
+      .arch-svg .arrow-blue { stroke: #2563eb; stroke-width: 2.2; fill: none; }
+      .arch-svg .arrow-green { stroke: #16a34a; stroke-width: 2.2; fill: none; }
+      .arch-svg .arrow-red { stroke: #dc2626; stroke-width: 2.2; fill: none; }
+      .arch-svg .dashed { stroke-dasharray: 7 5; }
+
       /* ---------- Faq ---------- */
       .faq-item {
         border-bottom: 1px solid var(--border-soft);
@@ -754,7 +943,16 @@
           background: var(--bg-card);
         }
         .sidebar-bottom { display: none; }
-        .main { padding: 20px 16px 40px; }
+        .main {
+          --main-inline-padding: 16px;
+          padding: 20px var(--main-inline-padding) 40px;
+        }
+        .section-wide {
+          width: 100%;
+          max-width: 100%;
+          margin-left: 0;
+          transform: none;
+        }
         .page-header h1 { font-size: 28px; }
         .page-header p { font-size: 15px; }
         .hero-grid,
@@ -762,9 +960,11 @@
         .stats-row,
         .content-grid.two-up,
         .content-grid.columns-2,
-        .content-grid.feature-split { grid-template-columns: 1fr; }
+        .content-grid.feature-split,
+        .arch-footnotes { grid-template-columns: 1fr; }
         .card { padding: 20px; }
         .faq-card { padding: 8px 20px; }
+        .arch-board { padding: 18px; }
       }
 
       /* ---------- Print ---------- */
@@ -812,6 +1012,10 @@
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
               常见问题
             </a>
+            <a class="nav-link" href="#architecture">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 3 7l9 5 9-5-9-5Z"/><path d="m3 12 9 5 9-5"/><path d="m3 17 9 5 9-5"/></svg>
+              系统架构
+            </a>
             <a class="nav-link external" href="https://github.com/XiNian-dada/NodeLite" target="_blank" rel="noreferrer">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4"/><path d="M9 18c-4.51 2-5-2-7-2"/></svg>
               GitHub
@@ -854,6 +1058,7 @@
                   </div>
                 </div>
                 <div class="hero-actions">
+                  <a class="action-chip" href="#architecture">查看系统架构</a>
                   <a class="action-chip" href="#deploy">先看最快部署路径</a>
                   <a class="action-chip" href="#advanced">查看进阶配置</a>
                   <a class="action-chip" href="#faq">查看排障 FAQ</a>
@@ -1395,6 +1600,310 @@ curl -u viewer:secret 'https://monitor.example.com/api/audit-log?event_type=logi
                   <p>如果你对常驻内存比较敏感，建议把这些数字当作实测参考值，而不是容量上限，并在自己的环境中持续观察 RSS 变化。</p>
                 </div>
               </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ==================== 系统架构 ==================== -->
+        <section class="section section-wide" id="architecture">
+          <h2 class="section-title">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--accent-blue)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 3 7l9 5 9-5-9-5Z"/><path d="m3 12 9 5 9-5"/><path d="m3 17 9 5 9-5"/></svg>
+            系统架构
+          </h2>
+          <p class="section-desc">按当前源码绘制：Agent 采集并通过 WebSocket 上报，Server 认证、清洗、聚合、持久化，再向 Web UI、JSON API 和 Prometheus 暴露视图。</p>
+
+          <div class="architecture-grid">
+            <div class="arch-board">
+              <h3>整体运行架构</h3>
+              <p>从部署入口到 Agent 上报、Server 内存状态、历史写入和前端读取的主路径。</p>
+              <svg class="arch-svg" viewBox="0 0 1180 620" role="img" aria-label="NodeLite overall runtime architecture">
+                <defs>
+                  <marker id="arrow-main" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                    <path d="M 0 0 L 10 5 L 0 10 z" fill="#334155"></path>
+                  </marker>
+                  <marker id="arrow-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                    <path d="M 0 0 L 10 5 L 0 10 z" fill="#2563eb"></path>
+                  </marker>
+                  <marker id="arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                    <path d="M 0 0 L 10 5 L 0 10 z" fill="#16a34a"></path>
+                  </marker>
+                </defs>
+
+                <rect class="boundary" x="24" y="92" width="260" height="402" rx="18"></rect>
+                <text class="title" x="46" y="122">Linux Agent 节点</text>
+                <rect class="box-purple" x="46" y="148" width="216" height="76" rx="12"></rect>
+                <text class="label" x="66" y="178">runtime::run</text>
+                <text class="small" x="66" y="202">load_agent_config(agent.toml)</text>
+                <rect class="box-purple" x="46" y="246" width="216" height="116" rx="12"></rect>
+                <text class="label" x="66" y="276">HostCollector</text>
+                <text class="small" x="66" y="300">/proc/stat / meminfo / loadavg</text>
+                <text class="small" x="66" y="322">/proc/net/dev / mounts / statvfs</text>
+                <text class="small" x="66" y="344">NodeIdentity + NodeSnapshot</text>
+                <rect class="box-purple" x="46" y="384" width="216" height="76" rx="12"></rect>
+                <text class="label" x="66" y="414">session::run_forever</text>
+                <text class="small" x="66" y="438">hello / metrics / pong / logs</text>
+
+                <rect class="boundary" x="404" y="56" width="470" height="510" rx="18"></rect>
+                <text class="title" x="428" y="86">nodelite-server 进程</text>
+                <rect class="box-green" x="428" y="118" width="164" height="76" rx="12"></rect>
+                <text class="label" x="450" y="148">/ws handler</text>
+                <text class="small" x="450" y="172">WsAdmission + Hello</text>
+                <rect class="box-green" x="642" y="118" width="190" height="76" rx="12"></rect>
+                <text class="label" x="664" y="148">NodeRegistry</text>
+                <text class="small" x="664" y="172">authorize / token generation</text>
+                <rect class="box-blue" x="428" y="232" width="190" height="104" rx="12"></rect>
+                <text class="label" x="450" y="262">Authenticated Session</text>
+                <text class="small" x="450" y="286">sanitize_snapshot</text>
+                <text class="small" x="450" y="308">ping/pong latency</text>
+                <rect class="box-blue" x="668" y="232" width="164" height="104" rx="12"></rect>
+                <text class="label" x="690" y="262">SharedState</text>
+                <text class="small" x="690" y="286">NodeStatus</text>
+                <text class="small" x="690" y="308">Overview / cache</text>
+                <rect class="box-yellow" x="428" y="378" width="164" height="82" rx="12"></rect>
+                <text class="label" x="450" y="408">HistoryStore</text>
+                <text class="small" x="450" y="432">bounded queue + batch writer</text>
+                <rect class="box-yellow" x="642" y="378" width="190" height="82" rx="12"></rect>
+                <text class="label" x="664" y="408">AgentLogStore / AuditLog</text>
+                <text class="small" x="664" y="432">runtime logs + security events</text>
+
+                <rect class="boundary" x="934" y="92" width="220" height="402" rx="18"></rect>
+                <text class="title" x="956" y="122">外部访问</text>
+                <rect class="box-gray" x="956" y="148" width="176" height="76" rx="12"></rect>
+                <text class="label" x="978" y="178">Nginx / Caddy</text>
+                <text class="small" x="978" y="202">HTTPS / WSS 终结</text>
+                <rect class="box-blue" x="956" y="250" width="176" height="76" rx="12"></rect>
+                <text class="label" x="978" y="280">Web UI / API</text>
+                <text class="small" x="978" y="304">/ /api/* /metrics</text>
+                <rect class="box-yellow" x="956" y="352" width="176" height="102" rx="12"></rect>
+                <text class="label" x="978" y="382">本地持久化</text>
+                <text class="small" x="978" y="406">server.json</text>
+                <text class="small" x="978" y="428">history/audit.sqlite3</text>
+
+                <path class="arrow-green" marker-end="url(#arrow-green)" d="M262 422 C320 422 350 156 428 156"></path>
+                <text class="tiny-center" x="338" y="278">wss / WireMessage</text>
+                <path class="arrow" marker-end="url(#arrow-main)" d="M592 156 H642"></path>
+                <text class="tiny-center" x="617" y="144">authorize</text>
+                <path class="arrow-blue" marker-end="url(#arrow-blue)" d="M523 194 V232"></path>
+                <text class="tiny-center" x="560" y="218">authenticated</text>
+                <path class="arrow-blue" marker-end="url(#arrow-blue)" d="M618 284 H668"></path>
+                <text class="tiny-center" x="642" y="272">update</text>
+                <path class="arrow" marker-end="url(#arrow-main)" d="M750 336 V378"></path>
+                <text class="tiny-center" x="792" y="362">logs / audit</text>
+                <path class="arrow" marker-end="url(#arrow-main)" d="M523 336 V378"></path>
+                <text class="tiny-center" x="560" y="362">history point</text>
+                <path class="arrow-blue" marker-end="url(#arrow-blue)" d="M832 284 C878 284 900 288 956 288"></path>
+                <text class="tiny-center" x="894" y="270">read cached view</text>
+                <path class="arrow-blue" marker-end="url(#arrow-blue)" d="M1044 250 V224"></path>
+                <path class="arrow-blue" marker-end="url(#arrow-blue)" d="M956 186 C910 186 900 156 832 156"></path>
+                <text class="tiny-center" x="896" y="134">proxy /ws</text>
+                <path class="arrow" marker-end="url(#arrow-main)" d="M737 194 V232"></path>
+                <text class="tiny-center" x="760" y="218">generation</text>
+                <path class="arrow" marker-end="url(#arrow-main)" d="M592 420 H642"></path>
+              </svg>
+            </div>
+
+            <div class="arch-board">
+              <h3>Server 内部组件图</h3>
+              <p><code>AppState</code> 是 Axum handler 和 WebSocket 会话拿到的共享上下文，后台任务围绕注册表、快照和离线状态运行。</p>
+              <svg class="arch-svg" viewBox="0 0 1180 680" role="img" aria-label="NodeLite server component architecture">
+                <defs>
+                  <marker id="arrow-server" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                    <path d="M 0 0 L 10 5 L 0 10 z" fill="#334155"></path>
+                  </marker>
+                  <marker id="arrow-server-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                    <path d="M 0 0 L 10 5 L 0 10 z" fill="#2563eb"></path>
+                  </marker>
+                </defs>
+
+                <rect class="box-green" x="470" y="40" width="240" height="70" rx="14"></rect>
+                <text class="title" x="522" y="72">startup::run_server</text>
+                <text class="small" x="505" y="94">load config / build router / spawn tasks</text>
+
+                <rect class="boundary" x="40" y="148" width="1100" height="430" rx="18"></rect>
+                <text class="title" x="64" y="180">AppState</text>
+
+                <rect class="box-blue" x="78" y="214" width="212" height="112" rx="12"></rect>
+                <text class="label" x="100" y="244">handlers::*</text>
+                <text class="small" x="100" y="268">pages / api / settings</text>
+                <text class="small" x="100" y="290">install / auth_routes</text>
+
+                <rect class="box-green" x="344" y="214" width="212" height="112" rx="12"></rect>
+                <text class="label" x="366" y="244">ws::session</text>
+                <text class="small" x="366" y="268">Hello -> authorize</text>
+                <text class="small" x="366" y="290">metrics / ping / refresh</text>
+
+                <rect class="box-blue" x="610" y="214" width="212" height="112" rx="12"></rect>
+                <text class="label" x="632" y="244">SharedState</text>
+                <text class="small" x="632" y="268">Registry in memory</text>
+                <text class="small" x="632" y="290">view_revision + cache</text>
+
+                <rect class="box-red" x="876" y="214" width="212" height="112" rx="12"></rect>
+                <text class="label" x="898" y="244">auth / admission</text>
+                <text class="small" x="898" y="268">Basic Auth + TOTP</text>
+                <text class="small" x="898" y="290">IP blocks / WS permits</text>
+
+                <rect class="box-yellow" x="78" y="388" width="212" height="112" rx="12"></rect>
+                <text class="label" x="100" y="418">NodeRegistry</text>
+                <text class="small" x="100" y="442">server.json</text>
+                <text class="small" x="100" y="464">Argon2id token hash</text>
+
+                <rect class="box-yellow" x="344" y="388" width="212" height="112" rx="12"></rect>
+                <text class="label" x="366" y="418">HistoryStore</text>
+                <text class="small" x="366" y="442">mpsc queue</text>
+                <text class="small" x="366" y="464">SQLite batch writer</text>
+
+                <rect class="box-yellow" x="610" y="388" width="212" height="112" rx="12"></rect>
+                <text class="label" x="632" y="418">AgentLogStore / AuditLog</text>
+                <text class="small" x="632" y="442">recent agent logs</text>
+                <text class="small" x="632" y="464">audit.sqlite3</text>
+
+                <rect class="box-gray" x="876" y="388" width="212" height="112" rx="12"></rect>
+                <text class="label" x="898" y="418">background tasks</text>
+                <text class="small" x="898" y="442">registry reload / stale reaper</text>
+                <text class="small" x="898" y="464">snapshot persistor</text>
+
+                <path class="arrow-blue" marker-end="url(#arrow-server-blue)" d="M590 110 V148"></path>
+                <path class="arrow" marker-end="url(#arrow-server)" d="M290 270 H344"></path>
+                <path class="arrow" marker-end="url(#arrow-server)" d="M556 270 H610"></path>
+                <path class="arrow" marker-end="url(#arrow-server)" d="M822 270 H876"></path>
+                <path class="arrow" marker-end="url(#arrow-server)" d="M450 326 V388"></path>
+                <path class="arrow" marker-end="url(#arrow-server)" d="M716 326 V388"></path>
+                <path class="arrow" marker-end="url(#arrow-server)" d="M982 326 V388"></path>
+                <path class="arrow" marker-end="url(#arrow-server)" d="M344 444 H290"></path>
+                <path class="arrow dashed" marker-end="url(#arrow-server)" d="M982 388 C982 352 716 350 716 326"></path>
+                <path class="arrow dashed" marker-end="url(#arrow-server)" d="M982 500 C982 540 716 540 716 500"></path>
+                <text class="tiny-center" x="318" y="196">
+                  <tspan x="318" dy="0">protected routes</tspan>
+                  <tspan x="318" dy="12">read / write</tspan>
+                </text>
+                <text class="tiny-center" x="584" y="196">sanitized status</text>
+                <text class="tiny-center" x="450" y="356">record_status</text>
+                <text class="tiny-center" x="842" y="356">logs / events</text>
+                <text class="tiny-center" x="846" y="542">
+                  <tspan x="846" dy="0">cleanup missing</tspan>
+                  <tspan x="846" dy="12">nodes</tspan>
+                </text>
+              </svg>
+            </div>
+
+            <div class="arch-board">
+              <h3>WebSocket 协议时序</h3>
+              <p>握手、认证、实时上报、心跳 RTT、token 刷新和断开处理都在一条已认证会话里完成。</p>
+              <svg class="arch-svg" viewBox="0 0 1180 620" role="img" aria-label="NodeLite WebSocket sequence diagram">
+                <defs>
+                  <marker id="arrow-seq" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                    <path d="M 0 0 L 10 5 L 0 10 z" fill="#334155"></path>
+                  </marker>
+                  <marker id="arrow-seq-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                    <path d="M 0 0 L 10 5 L 0 10 z" fill="#2563eb"></path>
+                  </marker>
+                  <marker id="arrow-seq-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                    <path d="M 0 0 L 10 5 L 0 10 z" fill="#16a34a"></path>
+                  </marker>
+                </defs>
+
+                <rect class="box-purple" x="80" y="36" width="180" height="58" rx="12"></rect>
+                <text class="title" x="140" y="72">Agent</text>
+                <rect class="box-green" x="500" y="36" width="180" height="58" rx="12"></rect>
+                <text class="title" x="548" y="72">Server /ws</text>
+                <rect class="box-yellow" x="920" y="36" width="180" height="58" rx="12"></rect>
+                <text class="title" x="954" y="72">Registry / State</text>
+
+                <path class="arrow dashed" d="M170 104 V560"></path>
+                <path class="arrow dashed" d="M590 104 V560"></path>
+                <path class="arrow dashed" d="M1010 104 V560"></path>
+
+                <path class="arrow-green" marker-end="url(#arrow-seq-green)" d="M170 132 H590"></path>
+                <text class="small-center" x="380" y="122">connect wss://domain/ws</text>
+                <path class="arrow-green" marker-end="url(#arrow-seq-green)" d="M170 184 H590"></path>
+                <text class="small-center" x="380" y="174">hello(protocol_version, token, identity)</text>
+                <path class="arrow" marker-end="url(#arrow-seq)" d="M590 224 H1010"></path>
+                <text class="small-center" x="800" y="214">authorize_identity + token_generation</text>
+                <path class="arrow" marker-end="url(#arrow-seq)" d="M1010 260 H590"></path>
+                <text class="small-center" x="800" y="250">AuthorizedNode</text>
+                <path class="arrow-blue" marker-end="url(#arrow-seq-blue)" d="M590 300 H170"></path>
+                <text class="small-center" x="380" y="290">server_notice(info, authenticated)</text>
+                <path class="arrow-green" marker-end="url(#arrow-seq-green)" d="M170 352 H590"></path>
+                <text class="small-center" x="380" y="342">metrics(snapshot)</text>
+                <path class="arrow" marker-end="url(#arrow-seq)" d="M590 386 H1010"></path>
+                <text class="small-center" x="800" y="376">sanitize + update_snapshot + history enqueue</text>
+                <path class="arrow-blue" marker-end="url(#arrow-seq-blue)" d="M590 430 H170"></path>
+                <text class="small-center" x="380" y="420">ping(nonce)</text>
+                <path class="arrow-green" marker-end="url(#arrow-seq-green)" d="M170 466 H590"></path>
+                <text class="small-center" x="380" y="456">pong(nonce)</text>
+                <path class="arrow" marker-end="url(#arrow-seq)" d="M590 500 H1010"></path>
+                <text class="small-center" x="800" y="490">update_latency</text>
+                <path class="arrow-blue" marker-end="url(#arrow-seq-blue)" d="M590 536 H170"></path>
+                <text class="small-center" x="380" y="526">refresh_token_response(new_token, expires_at)</text>
+              </svg>
+            </div>
+
+            <div class="arch-board">
+              <h3>存储、安全与部署边界</h3>
+              <p>敏感凭证不直接暴露给前端；Registry、History、Audit 与 Snapshot 分别承担授权、趋势、安全事件和恢复。</p>
+              <svg class="arch-svg" viewBox="0 0 1180 600" role="img" aria-label="NodeLite security storage deployment architecture">
+                <defs>
+                  <marker id="arrow-sec" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                    <path d="M 0 0 L 10 5 L 0 10 z" fill="#334155"></path>
+                  </marker>
+                  <marker id="arrow-sec-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                    <path d="M 0 0 L 10 5 L 0 10 z" fill="#dc2626"></path>
+                  </marker>
+                </defs>
+
+                <rect class="boundary" x="40" y="48" width="300" height="456" rx="18"></rect>
+                <text class="title" x="64" y="80">访问入口</text>
+                <rect class="box-blue" x="66" y="110" width="248" height="74" rx="12"></rect>
+                <text class="label" x="88" y="140">Web UI / JSON API / Metrics</text>
+                <text class="small" x="88" y="164">Basic Auth 保护</text>
+                <rect class="box-red" x="66" y="214" width="248" height="94" rx="12"></rect>
+                <text class="label" x="88" y="244">ReadonlyRouteAuth + TOTP</text>
+                <text class="small" x="88" y="268">pending/auth cookie 仅存随机 token</text>
+                <text class="small" x="88" y="290">TOTP step 防重放</text>
+                <rect class="box-red" x="66" y="338" width="248" height="94" rx="12"></rect>
+                <text class="label" x="88" y="368">Admission Controllers</text>
+                <text class="small" x="88" y="392">/ws 连接配额</text>
+                <text class="small" x="88" y="414">install / 2FA / sensitive auth 失败封禁</text>
+
+                <rect class="boundary" x="440" y="48" width="300" height="456" rx="18"></rect>
+                <text class="title" x="464" y="80">Server 数据边界</text>
+                <rect class="box-yellow" x="466" y="110" width="248" height="82" rx="12"></rect>
+                <text class="label" x="488" y="140">server.json</text>
+                <text class="small" x="488" y="164">Argon2id token_hash / generation</text>
+                <rect class="box-yellow" x="466" y="220" width="248" height="82" rx="12"></rect>
+                <text class="label" x="488" y="250">history.sqlite3</text>
+                <text class="small" x="488" y="274">history_points + WAL + indexes</text>
+                <rect class="box-yellow" x="466" y="330" width="248" height="82" rx="12"></rect>
+                <text class="label" x="488" y="360">audit.sqlite3</text>
+                <text class="small" x="488" y="384">login / TOTP / token / rate limit</text>
+                <rect class="box-yellow" x="466" y="440" width="248" height="44" rx="12"></rect>
+                <text class="label" x="488" y="468">snapshot.json 15s restore point</text>
+
+                <rect class="boundary" x="840" y="48" width="300" height="456" rx="18"></rect>
+                <text class="title" x="864" y="80">部署与恢复</text>
+                <rect class="box-gray" x="866" y="110" width="248" height="74" rx="12"></rect>
+                <text class="label" x="888" y="140">Nginx / Caddy</text>
+                <text class="small" x="888" y="164">TLS / WSS / real client IP</text>
+                <rect class="box-green" x="866" y="214" width="248" height="94" rx="12"></rect>
+                <text class="label" x="888" y="244">nodelite-server</text>
+                <text class="small" x="888" y="268">127.0.0.1:8080</text>
+                <text class="small" x="888" y="290">graceful shutdown + final flush</text>
+                <rect class="box-purple" x="866" y="338" width="248" height="94" rx="12"></rect>
+                <text class="label" x="888" y="368">nodelite-agent</text>
+                <text class="small" x="888" y="392">agent.toml token 原子替换</text>
+                <text class="small" x="888" y="414">指数退避重连</text>
+
+                <path class="arrow-red" marker-end="url(#arrow-sec-red)" d="M314 260 H466"></path>
+                <text class="tiny" x="344" y="246">auth events</text>
+                <path class="arrow" marker-end="url(#arrow-sec)" d="M714 151 H866"></path>
+                <text class="tiny" x="748" y="137">install bootstrap</text>
+                <path class="arrow" marker-end="url(#arrow-sec)" d="M866 260 H714"></path>
+                <text class="tiny" x="746" y="246">read/write state</text>
+                <path class="arrow" marker-end="url(#arrow-sec)" d="M990 338 V308"></path>
+                <text class="tiny" x="1002" y="326">/ws</text>
+                <path class="arrow" marker-end="url(#arrow-sec)" d="M590 412 V440"></path>
+                <text class="tiny" x="602" y="430">snapshot</text>
+              </svg>
             </div>
           </div>
         </section>
