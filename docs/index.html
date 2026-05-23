@@ -1650,38 +1650,50 @@ curl -u viewer:secret 'https://monitor.example.com/api/audit-log?event_type=logi
                 <text class="title" x="46" y="122">Linux Agent 节点</text>
                 <rect class="box-purple" x="46" y="148" width="216" height="76" rx="12"></rect>
                 <text class="label" x="66" y="178">runtime::run</text>
-                <text class="small" x="66" y="202">load_agent_config(agent.toml)</text>
+                <text class="small" x="66" y="202">加载 agent.toml 配置</text>
                 <rect class="box-purple" x="46" y="246" width="216" height="116" rx="12"></rect>
                 <text class="label" x="66" y="276">HostCollector</text>
-                <text class="small" x="66" y="300">/proc/stat / meminfo / loadavg</text>
-                <text class="small" x="66" y="322">/proc/net/dev / mounts / statvfs</text>
-                <text class="small" x="66" y="344">NodeIdentity + NodeSnapshot</text>
+                <text class="small" x="66" y="300">读取 /proc/stat、meminfo、loadavg</text>
+                <text class="small" x="66" y="322">读取 net/dev、mounts、statvfs</text>
+                <text class="small" x="66" y="344">生成节点身份与监控快照</text>
                 <rect class="box-purple" x="46" y="384" width="216" height="76" rx="12"></rect>
                 <text class="label" x="66" y="414">session::run_forever</text>
-                <text class="small" x="66" y="438">hello / metrics / pong / logs</text>
+                <text class="small" x="66" y="432">
+                  <tspan x="66" dy="0">hello / metrics</tspan>
+                  <tspan x="66" dy="16">/ pong / logs 消息</tspan>
+                </text>
 
                 <rect class="boundary" x="404" y="56" width="470" height="510" rx="18"></rect>
                 <text class="title" x="428" y="86">nodelite-server 进程</text>
                 <rect class="box-green" x="428" y="118" width="164" height="76" rx="12"></rect>
                 <text class="label" x="450" y="148">/ws handler</text>
-                <text class="small" x="450" y="172">WsAdmission + Hello</text>
+                <text class="small" x="450" y="172">接入控制与 Hello 握手</text>
                 <rect class="box-green" x="642" y="118" width="190" height="76" rx="12"></rect>
                 <text class="label" x="664" y="148">NodeRegistry</text>
-                <text class="small" x="664" y="172">authorize / token generation</text>
+                <text class="small" x="664" y="166">
+                  <tspan x="664" dy="0">认证节点并维护</tspan>
+                  <tspan x="664" dy="16">token 代次</tspan>
+                </text>
                 <rect class="box-blue" x="428" y="232" width="190" height="104" rx="12"></rect>
                 <text class="label" x="450" y="262">Authenticated Session</text>
-                <text class="small" x="450" y="286">sanitize_snapshot</text>
-                <text class="small" x="450" y="308">ping/pong latency</text>
+                <text class="small" x="450" y="286">清洗上报快照</text>
+                <text class="small" x="450" y="308">记录 ping/pong 延迟</text>
                 <rect class="box-blue" x="668" y="232" width="164" height="104" rx="12"></rect>
                 <text class="label" x="690" y="262">SharedState</text>
-                <text class="small" x="690" y="286">NodeStatus</text>
-                <text class="small" x="690" y="308">Overview / cache</text>
+                <text class="small" x="690" y="286">节点状态</text>
+                <text class="small" x="690" y="308">总览视图 / 缓存</text>
                 <rect class="box-yellow" x="428" y="378" width="164" height="82" rx="12"></rect>
                 <text class="label" x="450" y="408">HistoryStore</text>
-                <text class="small" x="450" y="432">bounded queue + batch writer</text>
+                <text class="small" x="450" y="426">
+                  <tspan x="450" dy="0">有界队列</tspan>
+                  <tspan x="450" dy="16">+ 批量写入</tspan>
+                </text>
                 <rect class="box-yellow" x="642" y="378" width="190" height="82" rx="12"></rect>
                 <text class="label" x="664" y="408">AgentLogStore / AuditLog</text>
-                <text class="small" x="664" y="432">runtime logs + security events</text>
+                <text class="small" x="664" y="426">
+                  <tspan x="664" dy="0">运行日志</tspan>
+                  <tspan x="664" dy="16">+ 安全事件</tspan>
+                </text>
 
                 <rect class="boundary" x="934" y="92" width="220" height="402" rx="18"></rect>
                 <text class="title" x="956" y="122">外部访问</text>
@@ -1689,7 +1701,7 @@ curl -u viewer:secret 'https://monitor.example.com/api/audit-log?event_type=logi
                 <text class="label" x="978" y="178">Nginx / Caddy</text>
                 <text class="small" x="978" y="202">HTTPS / WSS 终结</text>
                 <rect class="box-blue" x="956" y="250" width="176" height="76" rx="12"></rect>
-                <text class="label" x="978" y="280">Web UI / API</text>
+                <text class="label" x="978" y="280">Web 面板 / API</text>
                 <text class="small" x="978" y="304">/ · /api/* · /metrics</text>
                 <rect class="box-yellow" x="956" y="352" width="176" height="102" rx="12"></rect>
                 <text class="label" x="978" y="382">本地持久化</text>
@@ -1701,29 +1713,29 @@ curl -u viewer:secret 'https://monitor.example.com/api/audit-log?event_type=logi
                 <text class="edge-text" x="339" y="276">wss / WireMessage</text>
                 <path class="arrow" marker-end="url(#arrow-main)" d="M592 156 H642"></path>
                 <rect class="edge-chip" x="580" y="128" width="74" height="22" rx="11"></rect>
-                <text class="edge-text" x="617" y="143">authorize</text>
+                <text class="edge-text" x="617" y="143">认证</text>
                 <path class="arrow-blue" marker-end="url(#arrow-blue)" d="M523 194 V232"></path>
                 <rect class="edge-chip" x="507" y="203" width="106" height="22" rx="11"></rect>
-                <text class="edge-text" x="560" y="218">authenticated</text>
+                <text class="edge-text" x="560" y="218">认证通过</text>
                 <path class="arrow-blue" marker-end="url(#arrow-blue)" d="M618 284 H668"></path>
                 <rect class="edge-chip" x="613" y="257" width="58" height="22" rx="11"></rect>
-                <text class="edge-text" x="642" y="272">update</text>
+                <text class="edge-text" x="642" y="272">更新</text>
                 <path class="arrow" marker-end="url(#arrow-main)" d="M750 336 V378"></path>
                 <rect class="edge-chip" x="737" y="347" width="110" height="22" rx="11"></rect>
-                <text class="edge-text" x="792" y="362">logs / audit</text>
+                <text class="edge-text" x="792" y="362">日志 / 审计</text>
                 <path class="arrow" marker-end="url(#arrow-main)" d="M523 336 V378"></path>
                 <rect class="edge-chip" x="502" y="347" width="116" height="22" rx="11"></rect>
-                <text class="edge-text" x="560" y="362">history point</text>
+                <text class="edge-text" x="560" y="362">历史点</text>
                 <path class="arrow-blue" marker-end="url(#arrow-blue)" d="M832 284 C878 284 900 288 956 288"></path>
                 <rect class="edge-chip-soft" x="836" y="255" width="116" height="22" rx="11"></rect>
-                <text class="edge-text" x="894" y="270">read cached view</text>
+                <text class="edge-text" x="894" y="270">读取缓存视图</text>
                 <path class="arrow-blue" marker-end="url(#arrow-blue)" d="M1044 250 V224"></path>
                 <path class="arrow-blue" marker-end="url(#arrow-blue)" d="M956 186 C910 186 900 156 832 156"></path>
                 <rect class="edge-chip-soft" x="854" y="118" width="84" height="22" rx="11"></rect>
-                <text class="edge-text" x="896" y="133">proxy /ws</text>
+                <text class="edge-text" x="896" y="133">代理 /ws</text>
                 <path class="arrow" marker-end="url(#arrow-main)" d="M737 194 V232"></path>
                 <rect class="edge-chip" x="712" y="203" width="96" height="22" rx="11"></rect>
-                <text class="edge-text" x="760" y="218">generation</text>
+                <text class="edge-text" x="760" y="218">代次</text>
                 <path class="arrow" marker-end="url(#arrow-main)" d="M592 420 H642"></path>
               </svg>
             </div>
@@ -1741,54 +1753,60 @@ curl -u viewer:secret 'https://monitor.example.com/api/audit-log?event_type=logi
                   </marker>
                 </defs>
 
-                <rect class="box-green" x="470" y="40" width="240" height="70" rx="14"></rect>
+                <rect class="box-green" x="470" y="40" width="240" height="80" rx="14"></rect>
                 <text class="title" x="522" y="72">startup::run_server</text>
-                <text class="small" x="505" y="94">load config / build router / spawn tasks</text>
+                <text class="small" x="505" y="88">
+                  <tspan x="505" dy="0">加载配置 / 构建路由</tspan>
+                  <tspan x="505" dy="16">/ 启动后台任务</tspan>
+                </text>
 
                 <rect class="boundary" x="40" y="148" width="1100" height="430" rx="18"></rect>
                 <text class="title" x="64" y="180">AppState</text>
 
                 <rect class="box-blue" x="78" y="214" width="212" height="112" rx="12"></rect>
                 <text class="label" x="100" y="244">handlers::*</text>
-                <text class="small" x="100" y="268">pages / api / settings</text>
-                <text class="small" x="100" y="290">install / auth_routes</text>
+                <text class="small" x="100" y="268">页面 / API / 设置</text>
+                <text class="small" x="100" y="290">安装 / 认证路由</text>
 
                 <rect class="box-green" x="344" y="214" width="212" height="112" rx="12"></rect>
                 <text class="label" x="366" y="244">ws::session</text>
-                <text class="small" x="366" y="268">Hello -> authorize</text>
-                <text class="small" x="366" y="290">metrics / ping / refresh</text>
+                <text class="small" x="366" y="268">Hello 握手 -> 认证</text>
+                <text class="small" x="366" y="290">指标 / 心跳 / 刷新 token</text>
 
                 <rect class="box-blue" x="610" y="214" width="212" height="112" rx="12"></rect>
                 <text class="label" x="632" y="244">SharedState</text>
-                <text class="small" x="632" y="268">Registry in memory</text>
-                <text class="small" x="632" y="290">view_revision + cache</text>
+                <text class="small" x="632" y="268">内存中的注册表</text>
+                <text class="small" x="632" y="290">视图版本 + 缓存</text>
 
                 <rect class="box-red" x="876" y="214" width="212" height="112" rx="12"></rect>
                 <text class="label" x="898" y="244">auth / admission</text>
                 <text class="small" x="898" y="268">Basic Auth + TOTP</text>
-                <text class="small" x="898" y="290">IP blocks / WS permits</text>
+                <text class="small" x="898" y="290">IP 封禁 / WS 准入</text>
 
                 <rect class="box-yellow" x="78" y="388" width="212" height="112" rx="12"></rect>
                 <text class="label" x="100" y="418">NodeRegistry</text>
                 <text class="small" x="100" y="442">server.json</text>
-                <text class="small" x="100" y="464">Argon2id token hash</text>
+                <text class="small" x="100" y="464">Argon2id token 哈希</text>
 
                 <rect class="box-yellow" x="344" y="388" width="212" height="112" rx="12"></rect>
                 <text class="label" x="366" y="418">HistoryStore</text>
-                <text class="small" x="366" y="442">mpsc queue</text>
-                <text class="small" x="366" y="464">SQLite batch writer</text>
+                <text class="small" x="366" y="442">mpsc 队列</text>
+                <text class="small" x="366" y="464">SQLite 批量写入</text>
 
                 <rect class="box-yellow" x="610" y="388" width="212" height="112" rx="12"></rect>
                 <text class="label" x="632" y="418">AgentLogStore / AuditLog</text>
-                <text class="small" x="632" y="442">recent agent logs</text>
+                <text class="small" x="632" y="442">近期 Agent 日志</text>
                 <text class="small" x="632" y="464">audit.sqlite3</text>
 
                 <rect class="box-gray" x="876" y="388" width="212" height="112" rx="12"></rect>
                 <text class="label" x="898" y="418">background tasks</text>
-                <text class="small" x="898" y="442">registry reload / stale reaper</text>
-                <text class="small" x="898" y="464">snapshot persistor</text>
+                <text class="small" x="898" y="436">
+                  <tspan x="898" dy="0">重载注册表</tspan>
+                  <tspan x="898" dy="16">/ 清理陈旧节点</tspan>
+                </text>
+                <text class="small" x="898" y="472">持久化快照</text>
 
-                <path class="arrow-blue" marker-end="url(#arrow-server-blue)" d="M590 110 V148"></path>
+                <path class="arrow-blue" marker-end="url(#arrow-server-blue)" d="M590 120 V148"></path>
                 <path class="arrow" marker-end="url(#arrow-server)" d="M290 270 H344"></path>
                 <path class="arrow" marker-end="url(#arrow-server)" d="M556 270 H610"></path>
                 <path class="arrow" marker-end="url(#arrow-server)" d="M822 270 H876"></path>
@@ -1800,19 +1818,19 @@ curl -u viewer:secret 'https://monitor.example.com/api/audit-log?event_type=logi
                 <path class="arrow dashed" marker-end="url(#arrow-server)" d="M982 500 C982 540 716 540 716 500"></path>
                 <rect class="edge-chip-soft" x="264" y="166" width="108" height="34" rx="14"></rect>
                 <text class="edge-text" x="318" y="182">
-                  <tspan x="318" dy="0">protected routes</tspan>
-                  <tspan x="318" dy="12">read / write</tspan>
+                  <tspan x="318" dy="0">受保护路由</tspan>
+                  <tspan x="318" dy="12">读 / 写</tspan>
                 </text>
                 <rect class="edge-chip" x="530" y="174" width="108" height="22" rx="11"></rect>
-                <text class="edge-text" x="584" y="189">sanitized status</text>
+                <text class="edge-text" x="584" y="189">清洗后状态</text>
                 <rect class="edge-chip" x="401" y="343" width="98" height="22" rx="11"></rect>
-                <text class="edge-text" x="450" y="358">record_status</text>
+                <text class="edge-text" x="450" y="358">记录状态</text>
                 <rect class="edge-chip" x="787" y="343" width="110" height="22" rx="11"></rect>
-                <text class="edge-text" x="842" y="358">logs / events</text>
+                <text class="edge-text" x="842" y="358">日志 / 事件</text>
                 <rect class="edge-chip-soft" x="786" y="520" width="120" height="34" rx="14"></rect>
                 <text class="edge-text" x="846" y="536">
-                  <tspan x="846" dy="0">cleanup missing</tspan>
-                  <tspan x="846" dy="12">nodes</tspan>
+                  <tspan x="846" dy="0">清理缺失</tspan>
+                  <tspan x="846" dy="12">节点</tspan>
                 </text>
               </svg>
             </div>
