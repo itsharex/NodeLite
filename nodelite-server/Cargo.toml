@@ -40,3 +40,6 @@ nodelite-proto = { path = "../nodelite-proto" }
 proptest = "1.4"
 tokio-tungstenite.workspace = true
 tower = "0.5"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(tarpaulin)'] }

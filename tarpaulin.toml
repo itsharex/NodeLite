@@ -16,8 +16,8 @@ workspace = true
 out = ["Xml", "Html"]
 output-dir = "target/tarpaulin"
 
-# 超时(秒):集成测试可能较慢
-timeout = 300
+# 超时:集成测试可能较慢
+timeout = "300s"
 
 # 关键模块补完覆盖后,把全仓最低门槛抬到 75%,避免后续回归。
 fail-under = 75

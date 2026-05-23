@@ -31,7 +31,11 @@ use nodelite_proto::{
 };
 
 pub const TEST_BASIC_AUTH_HEADER: &str = "Basic dmlld2VyOnNlY3JldA==";
-pub const TEST_TIMEOUT: Duration = Duration::from_secs(10);
+#[cfg(tarpaulin)]
+const TEST_TIMEOUT_SECS: u64 = 60;
+#[cfg(not(tarpaulin))]
+const TEST_TIMEOUT_SECS: u64 = 10;
+pub const TEST_TIMEOUT: Duration = Duration::from_secs(TEST_TIMEOUT_SECS);
 pub const LIVE_REFRESH_TIMEOUT: Duration = Duration::from_secs(20);
 
 pub(crate) type TestSocket =
