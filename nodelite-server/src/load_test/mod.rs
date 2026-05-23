@@ -5,7 +5,9 @@
 //! `cargo test -p nodelite-server load_test_api_surface_scores -- --ignored --nocapture`
 //! `cargo test -p nodelite-server load_test_reconnect_storm_scores -- --ignored --nocapture`
 
+mod diagnostics;
 mod fake_agent;
+mod large_scale;
 mod probes;
 mod scenarios;
 mod server;
@@ -85,6 +87,7 @@ struct AgentWorkload {
     metrics_per_node: u64,
     inter_message_delay: Duration,
     hold_after_send: Duration,
+    disk_entries: usize,
 }
 
 type TestSocket = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<TcpStream>>;
@@ -109,6 +112,38 @@ async fn load_test_api_surface_scores() {
 #[ignore = "manual load test; run with -- --ignored --nocapture"]
 async fn load_test_reconnect_storm_scores() {
     if let Err(error) = scenarios::run_reconnect_storm_load_test().await {
+        panic!("{error:#}");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+#[ignore = "manual large-fleet load test; run with -- --ignored --nocapture"]
+async fn load_test_large_fleet_scores() {
+    if let Err(error) = large_scale::run_large_fleet_load_test().await {
+        panic!("{error:#}");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+#[ignore = "manual dashboard fanout load test; run with -- --ignored --nocapture"]
+async fn load_test_dashboard_fanout_scores() {
+    if let Err(error) = large_scale::run_dashboard_fanout_load_test().await {
+        panic!("{error:#}");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+#[ignore = "manual history pressure load test; run with -- --ignored --nocapture"]
+async fn load_test_history_pressure_scores() {
+    if let Err(error) = large_scale::run_history_pressure_load_test().await {
+        panic!("{error:#}");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+#[ignore = "manual large payload load test; run with -- --ignored --nocapture"]
+async fn load_test_payload_size_scores() {
+    if let Err(error) = large_scale::run_payload_size_load_test().await {
         panic!("{error:#}");
     }
 }

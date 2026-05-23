@@ -72,6 +72,27 @@ pub(super) fn fake_snapshot(uptime_secs: u64) -> NodeSnapshot {
     fake_snapshot_at(uptime_secs, Utc::now())
 }
 
+pub(super) fn fake_snapshot_with_disks(uptime_secs: u64, disk_entries: usize) -> NodeSnapshot {
+    let mut snapshot = fake_snapshot(uptime_secs);
+    if disk_entries <= snapshot.disks.len() {
+        return snapshot;
+    }
+
+    let template = snapshot.disks.first().cloned();
+    if let Some(template) = template {
+        snapshot.disks = (0..disk_entries)
+            .map(|index| {
+                let mut disk = template.clone();
+                disk.device = format!("/dev/vd{}", (b'a' + (index % 26) as u8) as char);
+                disk.mount_point = format!("/mnt/load-{index:02}");
+                disk.used_percent = 35.0 + (index % 50) as f64;
+                disk
+            })
+            .collect();
+    }
+    snapshot
+}
+
 pub(super) async fn wait_for_final_snapshots(
     shared: SharedState,
     credentials: &[AgentCredential],
@@ -261,7 +282,7 @@ async fn send_metrics_workload(
     burst_barrier.wait().await;
     for step in 0..workload.metrics_per_node {
         let metrics = WireMessage::Metrics(MetricsMessage {
-            snapshot: fake_snapshot(workload.uptime_start + step),
+            snapshot: fake_snapshot_with_disks(workload.uptime_start + step, workload.disk_entries),
         });
         send_wire_message(socket, &metrics).await?;
         if !workload.inter_message_delay.is_zero() {

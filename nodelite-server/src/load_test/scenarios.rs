@@ -131,6 +131,7 @@ async fn run_single_scenario(node_count: usize) -> Result<ScenarioResult> {
         metrics_per_node: LOAD_TEST_METRICS_PER_NODE,
         inter_message_delay: Duration::ZERO,
         hold_after_send: Duration::ZERO,
+        disk_entries: 1,
     };
 
     for credential in credentials.clone() {
@@ -220,6 +221,7 @@ async fn run_api_surface_scenario(node_count: usize) -> Result<ApiScenarioResult
         metrics_per_node: LOAD_TEST_STEADY_METRICS_PER_NODE,
         inter_message_delay: Duration::from_millis(LOAD_TEST_STEADY_METRIC_DELAY_MS),
         hold_after_send: Duration::ZERO,
+        disk_entries: 1,
     };
     let expected_final_uptime = workload.metrics_per_node;
     let connect_started = Instant::now();
@@ -338,6 +340,7 @@ async fn run_reconnect_storm_scenario(node_count: usize) -> Result<StormScenario
             metrics_per_node: LOAD_TEST_STORM_METRICS_PER_CYCLE,
             inter_message_delay: Duration::from_millis(LOAD_TEST_STORM_METRIC_DELAY_MS),
             hold_after_send: Duration::from_millis(250),
+            disk_entries: 1,
         };
         let expected_final_uptime = workload.uptime_start + workload.metrics_per_node - 1;
         let connect_started = Instant::now();

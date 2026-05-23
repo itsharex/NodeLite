@@ -1,3 +1,4 @@
+use std::io::ErrorKind;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -12,7 +13,7 @@ use tower_http::trace::TraceLayer;
 
 use super::AgentCredential;
 use crate::handlers::{
-    node_history, node_logs, node_status, nodes, overview, require_readonly_auth,
+    metrics, node_history, node_logs, node_status, nodes, overview, require_readonly_auth,
 };
 use crate::history::HistoryStore;
 use crate::registry::{IssueNodeRequest, issue_node};
@@ -27,6 +28,14 @@ pub(super) struct TestServer {
     shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
     server_handle: JoinHandle<Result<(), std::io::Error>>,
     temp_dir: PathBuf,
+    history_path: PathBuf,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) struct HistoryArtifactBytes {
+    pub(super) db: u64,
+    pub(super) wal: u64,
+    pub(super) shm: u64,
 }
 
 impl TestServer {
@@ -72,7 +81,7 @@ impl TestServer {
             addr,
             format!("http://{addr}"),
             registry_path,
-            history_path,
+            history_path.clone(),
             snapshot_path,
         );
         config.ws = test_ws_config(node_count.saturating_add(32), node_count.saturating_add(32));
@@ -88,6 +97,7 @@ impl TestServer {
         let shared = state.shared.clone();
         let protected_routes = Router::new()
             .route("/api/overview", get(overview))
+            .route("/metrics", get(metrics))
             .route("/api/nodes", get(nodes))
             .route("/api/nodes/{node_id}", get(node_status))
             .route("/api/nodes/{node_id}/history", get(node_history))
@@ -119,9 +129,26 @@ impl TestServer {
                 shutdown_tx: Some(shutdown_tx),
                 server_handle,
                 temp_dir,
+                history_path,
             },
             credentials,
         ))
+    }
+
+    pub(super) async fn history_artifact_bytes(&self) -> Result<HistoryArtifactBytes> {
+        Ok(HistoryArtifactBytes {
+            db: file_len_or_zero(&self.history_path).await?,
+            wal: file_len_or_zero(&PathBuf::from(format!(
+                "{}-wal",
+                self.history_path.display()
+            )))
+            .await?,
+            shm: file_len_or_zero(&PathBuf::from(format!(
+                "{}-shm",
+                self.history_path.display()
+            )))
+            .await?,
+        })
     }
 
     pub(super) async fn shutdown(mut self) -> Result<()> {
@@ -135,5 +162,13 @@ impl TestServer {
         result.map_err(|error| anyhow!("server task: {error}"))?;
         let _ = tokio::fs::remove_dir_all(&self.temp_dir).await;
         Ok(())
+    }
+}
+
+async fn file_len_or_zero(path: &PathBuf) -> Result<u64> {
+    match tokio::fs::metadata(path).await {
+        Ok(metadata) => Ok(metadata.len()),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(0),
+        Err(error) => Err(error).with_context(|| format!("stat {}", path.display())),
     }
 }
