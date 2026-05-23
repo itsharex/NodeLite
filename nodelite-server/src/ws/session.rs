@@ -266,6 +266,7 @@ async fn handle_agent_logs_message(
             accepted = result.accepted,
             dropped_batch_cap = result.dropped_batch_cap,
             dropped_sanitize = result.dropped_sanitize,
+            evicted_global_budget = result.evicted_global_budget,
             "dropped some agent log entries during ingestion"
         );
     }
