@@ -68,3 +68,124 @@ fn sum_finite_f64(total: f64, value: f64) -> f64 {
     let next = total + value;
     if next.is_finite() { next } else { f64::MAX }
 }
+
+#[cfg(test)]
+mod tests {
+    use chrono::Utc;
+    use nodelite_proto::{
+        LoadAverage, MemoryUsage, NetworkCounters, NodeIdentity, NodeSnapshot, NodeStatus,
+    };
+
+    use super::build_overview;
+
+    fn status(
+        node_id: &str,
+        online: bool,
+        latency_ms: Option<u64>,
+        snapshot: Option<NodeSnapshot>,
+    ) -> NodeStatus {
+        NodeStatus {
+            identity: NodeIdentity {
+                node_id: node_id.to_string(),
+                node_label: node_id.to_string(),
+                hostname: format!("{node_id}.example"),
+                os: "linux".to_string(),
+                kernel_version: None,
+                cpu_model: None,
+                cpu_cores: 4,
+                agent_version: "test".to_string(),
+                boot_time: None,
+                tags: Vec::new(),
+            },
+            remote_ip: None,
+            snapshot,
+            last_seen: None,
+            latency_ms,
+            online,
+        }
+    }
+
+    fn snapshot(
+        total_rx_bytes: u64,
+        total_tx_bytes: u64,
+        rx_bytes_per_sec: Option<f64>,
+        tx_bytes_per_sec: Option<f64>,
+    ) -> NodeSnapshot {
+        NodeSnapshot {
+            collected_at: Utc::now(),
+            cpu_usage_percent: Some(10.0),
+            load: LoadAverage {
+                one: 1.0,
+                five: 1.0,
+                fifteen: 1.0,
+            },
+            memory: MemoryUsage {
+                total_bytes: 100,
+                used_bytes: 50,
+                available_bytes: 50,
+                swap_total_bytes: 0,
+                swap_used_bytes: 0,
+            },
+            uptime_secs: 60,
+            disks: Vec::new(),
+            network: NetworkCounters {
+                total_rx_bytes,
+                total_tx_bytes,
+                rx_bytes_per_sec,
+                tx_bytes_per_sec,
+            },
+        }
+    }
+
+    #[test]
+    fn build_overview_counts_online_latency_and_snapshots() {
+        let statuses = vec![
+            status(
+                "hk-01",
+                true,
+                Some(120),
+                Some(snapshot(10, 20, Some(1.5), Some(2.5))),
+            ),
+            status("hk-02", false, Some(999), None),
+            status(
+                "hk-03",
+                true,
+                Some(60),
+                Some(snapshot(30, 40, Some(3.5), Some(4.5))),
+            ),
+        ];
+
+        let overview = build_overview(&statuses);
+        assert_eq!(overview.total_nodes, 3);
+        assert_eq!(overview.online_nodes, 2);
+        assert_eq!(overview.offline_nodes, 1);
+        assert_eq!(overview.total_rx_bytes, 40);
+        assert_eq!(overview.total_tx_bytes, 60);
+        assert_eq!(overview.current_rx_bytes_per_sec, 5.0);
+        assert_eq!(overview.current_tx_bytes_per_sec, 7.0);
+        assert_eq!(overview.average_latency_ms, Some(90.0));
+    }
+
+    #[test]
+    fn build_overview_ignores_invalid_rates_and_clamps_overflow() {
+        let statuses = vec![
+            status(
+                "hk-01",
+                true,
+                None,
+                Some(snapshot(0, 0, Some(-1.0), Some(f64::MAX))),
+            ),
+            status(
+                "hk-02",
+                true,
+                None,
+                Some(snapshot(0, 0, Some(f64::INFINITY), Some(f64::MAX))),
+            ),
+        ];
+
+        let overview = build_overview(&statuses);
+        assert_eq!(overview.current_rx_bytes_per_sec, 0.0);
+        assert_eq!(overview.current_tx_bytes_per_sec, f64::MAX);
+        assert_eq!(overview.average_latency_ms, None);
+    }
+}

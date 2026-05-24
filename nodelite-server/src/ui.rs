@@ -168,7 +168,9 @@ fn html_attr_escape(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{index_html, index_page_csp, node_html, node_page_csp, verify_2fa_page_csp};
+    use super::{
+        index_html, index_page_csp, node_html, node_page_csp, verify_2fa_html, verify_2fa_page_csp,
+    };
 
     #[test]
     fn index_html_reuses_cached_render_for_same_refresh_interval() {
@@ -180,6 +182,13 @@ mod tests {
                 .expect("cached index html should stay utf-8")
                 .contains("/assets/ui-i18n.json")
         );
+    }
+
+    #[test]
+    fn index_html_injects_refresh_interval_into_template_shell() {
+        let rendered = index_html(7);
+        let body = std::str::from_utf8(rendered.as_ref()).expect("index html should stay utf-8");
+        assert!(body.contains("data-refresh-ms=\"7000\""));
     }
 
     #[test]
@@ -212,5 +221,12 @@ mod tests {
             assert!(csp.contains("style-src 'self' 'unsafe-inline' 'sha256-"));
             assert!(csp.contains("style-src-attr 'unsafe-inline'"));
         }
+    }
+
+    #[test]
+    fn verify_2fa_html_returns_embedded_template() {
+        let rendered = verify_2fa_html();
+        assert!(rendered.contains("<!doctype html>"));
+        assert!(rendered.contains("data-i18n=\"title\""));
     }
 }
