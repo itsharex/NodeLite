@@ -101,9 +101,9 @@ curl -fsSL https://github.com/XiNian-dada/NodeLite/releases/latest/download/inst
 
 如果你对 Agent 的长期常驻内存敏感，建议在自己的环境中持续观察 RSS 变化并预留余量。
 
-### 2026-05-23 release 压测基线
+### 2026-05-24 release 压测基线
 
-下面这组数据来自 2026-05-23 对当前版本执行的仓库内置 loopback 压测，使用 release 构建直接实测：
+下面这组数据来自 2026-05-24 对当前版本执行的仓库内置 loopback 压测，使用 release 构建直接实测：
 
 ```bash
 cargo test -p nodelite-server --release load_test_scaling_scores -- --ignored --nocapture
@@ -119,10 +119,10 @@ cargo test -p nodelite-server --release load_test_reconnect_storm_scores -- --ig
 
 | 节点数 | 全部接入耗时 | 收敛耗时 | 总 metrics 数 | metrics 吞吐 | overview p50 | overview p95 | overview max |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 20 | 78.0 ms | 21.0 ms | 240 | 11406.7/s | 0.52 ms | 0.89 ms | 1.18 ms |
-| 50 | 162.1 ms | 22.2 ms | 600 | 26980.0/s | 0.46 ms | 0.91 ms | 1.53 ms |
-| 100 | 280.6 ms | 21.6 ms | 1200 | 55458.6/s | 0.63 ms | 5.28 ms | 6.53 ms |
-| 200 | 545.9 ms | 22.2 ms | 2400 | 107925.6/s | 0.54 ms | 4.10 ms | 4.37 ms |
+| 20 | 196.0 ms | 21.7 ms | 240 | 11037.4/s | 0.39 ms | 0.74 ms | 0.79 ms |
+| 50 | 473.2 ms | 21.3 ms | 600 | 28156.8/s | 0.45 ms | 2.84 ms | 33.68 ms |
+| 100 | 930.6 ms | 22.1 ms | 1200 | 54329.4/s | 0.49 ms | 1.50 ms | 3.22 ms |
+| 200 | 1904.1 ms | 21.8 ms | 2400 | 109972.1/s | 0.49 ms | 2.93 ms | 5.40 ms |
 
 #### 200 节点读接口延迟
 
@@ -130,20 +130,20 @@ cargo test -p nodelite-server --release load_test_reconnect_storm_scores -- --ig
 
 | 接口 | p50 | p95 | max |
 | --- | ---: | ---: | ---: |
-| `/api/overview` | 0.59 ms | 2.27 ms | 2.92 ms |
-| `/api/nodes` | 1.05 ms | 4.02 ms | 10.05 ms |
-| `/api/nodes/{node_id}` | 0.59 ms | 2.93 ms | 3.63 ms |
-| `/api/nodes/{node_id}/history` | 1.35 ms | 3.29 ms | 3.62 ms |
+| `/api/overview` | 0.43 ms | 2.33 ms | 2.74 ms |
+| `/api/nodes` | 0.98 ms | 2.38 ms | 3.22 ms |
+| `/api/nodes/{node_id}` | 0.48 ms | 2.75 ms | 2.75 ms |
+| `/api/nodes/{node_id}/history` | 1.21 ms | 2.67 ms | 3.37 ms |
 
 #### 200 节点重连风暴
 
 `load_test_reconnect_storm_scores` 会把 `200` 个节点连续拉起和断开 `4` 轮，共计 `800` 次会话建立。当前版本在这组压力下的关键指标如下：
 
-- **批量接入 p95**：875.34 ms
-- **最后一轮指标恢复 p95**：66.62 ms
-- **批量断开完成 p95**：22.47 ms
-- **风暴期间 `/api/overview` p95**：2.77 ms
-- **风暴期间 `/api/nodes` p95**：3.10 ms
+- **批量接入 p95**：1664.63 ms
+- **最后一轮指标恢复 p95**：67.21 ms
+- **批量断开完成 p95**：22.17 ms
+- **风暴期间 `/api/overview` p95**：2.86 ms
+- **风暴期间 `/api/nodes` p95**：3.27 ms
 
 说明：
 
@@ -171,6 +171,16 @@ cargo test -p nodelite-server --release load_test_payload_size_scores -- --ignor
 - `load_test_payload_size_scores`：`500` 节点、每节点 `64` 个 disk entry，观察大 payload 的 API body 和渲染前置压力。
 
 每条 `*_RESULT` 输出都会包含对应场景的 p95 延迟、API body bytes 的 `p50/p95/max`、当前进程 RSS、history writer queue depth、dropped writes，以及 SQLite `db/wal/shm` 文件大小。
+
+本次同机实测的样本结果如下：
+
+| 场景 | 关键规模 | metrics 吞吐 | 关键 p95 | 响应体大小 | RSS | history dropped writes |
+| --- | --- | ---: | --- | --- | ---: | ---: |
+| `load_test_large_fleet_scores` | `500` 节点 | `56606.4/s` | `overview 1.03 ms` / `nodes 2.35 ms` / `metrics 5.05 ms` | `overview 257 B` / `nodes 484501 B` / `metrics 722807 B` | `194.0 MiB` | `0` |
+| `load_test_large_fleet_scores` | `1000` 节点 | `82519.7/s` | `overview 1.02 ms` / `nodes 5.74 ms` / `metrics 10.66 ms` | `overview 261 B` / `nodes 968995 B` / `metrics 1435821 B` | `332.7 MiB` | `0` |
+| `load_test_dashboard_fanout_scores` | `1000` 节点 + `20` readers | `86045.9/s` | `overview 2.99 ms` / `nodes 12.61 ms` / `metrics 20.22 ms` | `overview 261 B` / `nodes 968995 B` / `metrics 1435821 B` | `338.8 MiB` | `0` |
+| `load_test_history_pressure_scores` | `1000` 节点 + `20` history readers | `89301.6/s` | `history 70.90 ms` | `history 50823 B` | `336.2 MiB` | `0` |
+| `load_test_payload_size_scores` | `500` 节点 + `64` disk entries | `16618.4/s` | `nodes 7.49 ms` / `metrics 14.56 ms` | `nodes 2602492 B` / `metrics 3146308 B` | `239.5 MiB` | `0` |
 
 首页 DOM 渲染压力可以用真实 `nodelite-server/assets/index.html` 生成自包含 fixture：
 
