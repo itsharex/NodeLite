@@ -125,4 +125,36 @@ mod tests {
             .expect_err("oversized tags should fail");
         assert_eq!(error.to_string(), "tags[0] must be <= 5 bytes");
     }
+
+    #[test]
+    fn validation_helpers_accept_expected_happy_paths() {
+        validate_non_empty("name", "node-lite").expect("non-empty values should pass");
+        validate_identifier("node_id", "hk-01.edge_1").expect("valid identifiers should pass");
+        validate_tag_list("tags", &[String::from("edge"), String::from("prod")], 4, 8)
+            .expect("small tag lists should pass");
+    }
+
+    #[test]
+    fn validate_identifier_rejects_values_longer_than_limit() {
+        let too_long = "a".repeat(129);
+        let error = validate_identifier("node_id", &too_long)
+            .expect_err("overlong identifiers should fail");
+        assert_eq!(error.to_string(), "node_id must be <= 128 characters");
+    }
+
+    #[test]
+    fn validate_tag_list_rejects_too_many_values() {
+        let error = validate_tag_list(
+            "tags",
+            &[
+                String::from("edge"),
+                String::from("prod"),
+                String::from("cn"),
+            ],
+            2,
+            8,
+        )
+        .expect_err("too many tags should fail");
+        assert_eq!(error.to_string(), "tags must contain at most 2 tags");
+    }
 }
