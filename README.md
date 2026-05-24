@@ -65,8 +65,14 @@ curl -fsSL https://github.com/XiNian-dada/NodeLite/releases/latest/download/inst
 ### 首页
 ![首页](images/home_page.png)
 
+### 系统设置
+![系统设置页面](images/syssettings_page.png)
+
 ### 节点详情
-![详情页面](images/details_page.png)
+![详情页面](images/detail_page.png)
+
+### 实时监控
+![监控页面](images/monitor_page.png)
 
 ### 硬件信息
 ![硬件页面](images/hardware_page.png)
@@ -74,11 +80,11 @@ curl -fsSL https://github.com/XiNian-dada/NodeLite/releases/latest/download/inst
 ### 网络监控
 ![网络页面](images/network_page.png)
 
-### 实时监控
-![监控页面](images/monitor_page.png)
+### Agent 日志
+![Agent 日志页面](images/agentlog_page.png)
 
-### 系统设置
-![设置页面](images/settings_page.png)
+### Agent 设置
+![Agent 设置页面](images/agentsettings_page.png)
 
 ## 性能表现
 
