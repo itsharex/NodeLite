@@ -36,6 +36,7 @@ mod tests {
         assert!(host_is_local(Some("LOCALHOST")));
         assert!(host_is_local(Some("127.0.0.1")));
         assert!(host_is_local(Some("::1")));
+        assert!(!host_is_local(Some("not-an-ip")));
         assert!(!host_is_local(Some("example.com")));
         assert!(!host_is_local(None));
     }

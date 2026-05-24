@@ -111,3 +111,149 @@ pub(super) fn parse_trusted_proxies(values: Vec<String>) -> Result<Vec<IpNet>, C
         })
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use ipnet::IpNet;
+
+    use super::{
+        normalize_tags, normalize_totp_secret, parse_trusted_proxies,
+        uses_insecure_remote_public_base_url, validate_sha256, validate_totp_secret, validate_url,
+    };
+
+    #[test]
+    fn validate_url_accepts_allowed_schemes_and_rejects_invalid_inputs() {
+        validate_url(
+            "server.public_base_url",
+            "https://monitor.example.com",
+            &["http", "https"],
+        )
+        .expect("https urls should pass");
+
+        let error = validate_url("agent.server", "ftp://monitor.example.com", &["ws", "wss"])
+            .expect_err("unexpected schemes should fail");
+        assert_eq!(
+            error.to_string(),
+            "agent.server must use one of these schemes: ws, wss"
+        );
+
+        let error = validate_url("agent.server", "not a url", &["ws"])
+            .expect_err("malformed urls should fail");
+        assert!(error.to_string().contains("invalid agent.server"));
+    }
+
+    #[test]
+    fn normalize_tags_trims_sorts_and_validates_lengths() {
+        let tags = normalize_tags(
+            "agent.tags",
+            vec![" edge ".to_string(), "prod".to_string(), "edge".to_string()],
+        )
+        .expect("small tag lists should pass");
+        assert_eq!(tags, vec!["edge".to_string(), "prod".to_string()]);
+
+        let error = normalize_tags("agent.tags", vec!["a".repeat(257)])
+            .expect_err("oversized tags should fail");
+        assert_eq!(error.to_string(), "agent.tags[0] must be <= 256 bytes");
+    }
+
+    #[test]
+    fn validate_sha256_rejects_empty_short_and_non_hex_values() {
+        validate_sha256(
+            "install.agent_release_sha256_x86_64",
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        )
+        .expect("64-character hexadecimal digests should pass");
+
+        let error = validate_sha256("checksum", "")
+            .expect_err("blank digests should fail before hex validation");
+        assert_eq!(error.to_string(), "checksum must not be empty");
+
+        let error = validate_sha256("checksum", "abcd").expect_err("short digests should fail");
+        assert_eq!(
+            error.to_string(),
+            "checksum must be a 64-character hexadecimal SHA-256 digest"
+        );
+
+        let error = validate_sha256("checksum", &format!("{}{}", "g", "0".repeat(63)))
+            .expect_err("non-hex digests should fail");
+        assert_eq!(
+            error.to_string(),
+            "checksum must be a 64-character hexadecimal SHA-256 digest"
+        );
+    }
+
+    #[test]
+    fn normalize_totp_secret_extracts_secret_from_supported_forms() {
+        assert_eq!(
+            normalize_totp_secret(
+                " otpauth://totp/NodeLite?issuer=NodeLite&secret=jbsw y3dp-ehpk3pxp "
+            ),
+            "JBSWY3DPEHPK3PXP"
+        );
+        assert_eq!(
+            normalize_totp_secret("?issuer=NodeLite&secret=abcd-efgh"),
+            "ABCDEFGH"
+        );
+        assert_eq!(normalize_totp_secret(" ab cd-ef "), "ABCDEF");
+    }
+
+    #[test]
+    fn validate_totp_secret_checks_decoding_and_minimum_length() {
+        validate_totp_secret("auth.totp_secret", "JBSWY3DPEHPK3PXP")
+            .expect("10-byte decoded secrets should pass");
+
+        let error = validate_totp_secret("auth.totp_secret", "NOT-BASE32!!!")
+            .expect_err("invalid base32 should fail");
+        assert_eq!(
+            error.to_string(),
+            "auth.totp_secret must be a valid RFC4648 base32 TOTP secret"
+        );
+
+        let error = validate_totp_secret("auth.totp_secret", "JBSWY3DP")
+            .expect_err("decoded secrets shorter than 10 bytes should fail");
+        assert_eq!(
+            error.to_string(),
+            "auth.totp_secret must decode to at least 10 bytes"
+        );
+    }
+
+    #[test]
+    fn insecure_public_base_url_only_flags_remote_http() {
+        assert!(uses_insecure_remote_public_base_url(
+            "http://monitor.example.com"
+        ));
+        assert!(!uses_insecure_remote_public_base_url(
+            "https://monitor.example.com"
+        ));
+        assert!(!uses_insecure_remote_public_base_url(
+            "http://127.0.0.1:8080"
+        ));
+    }
+
+    #[test]
+    fn parse_trusted_proxies_normalizes_and_parses_networks() {
+        let proxies = parse_trusted_proxies(vec![
+            " 10.0.0.0/8 ".to_string(),
+            "192.168.0.0/16".to_string(),
+            "10.0.0.0/8".to_string(),
+        ])
+        .expect("valid proxy cidrs should pass");
+        assert_eq!(
+            proxies,
+            vec![
+                "10.0.0.0/8".parse::<IpNet>().expect("cidr should parse"),
+                "192.168.0.0/16"
+                    .parse::<IpNet>()
+                    .expect("cidr should parse"),
+            ]
+        );
+
+        let error = parse_trusted_proxies(vec!["bad-cidr".to_string()])
+            .expect_err("invalid proxy cidrs should fail");
+        assert!(
+            error
+                .to_string()
+                .contains("invalid server.trusted_proxies entry \"bad-cidr\"")
+        );
+    }
+}
