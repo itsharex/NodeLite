@@ -56,7 +56,7 @@ curl -fsSL https://github.com/XiNian-dada/NodeLite/releases/latest/download/inst
 - `nodelite-server`
   推荐部署在 Linux（systemd 环境），官方发布产物提供 `x86_64-unknown-linux-musl` 与 `aarch64-unknown-linux-musl`
 - `nodelite-agent`
-  支持 Linux 与 macOS；官方发布二进制覆盖 Linux 与 macOS（Intel / Apple Silicon），但一键安装脚本当前仍仅覆盖 Linux，macOS 推荐直接下载二进制或源码运行
+  支持 Linux 与 macOS；官方发布二进制覆盖 Linux 与 macOS（Intel / Apple Silicon），其中 macOS 的一键安装 / launchd 集成仍属实验性支持，推荐先在测试机验证后再用于长期运行
 - 反向代理
   推荐使用 Nginx 或 Caddy 终结 HTTPS / WSS
 
@@ -615,25 +615,30 @@ curl -fsSL https://monitor.example.com/install/install-agent.sh | \
 - 脚本会先把 GitHub `latest` 解析成具体 tag，再下载同一个 release 下的 `SHA256SUMS.txt` 和 agent 二进制，避免刚发版时 CDN 短时间不一致
 - 一次性 install token 已经内联在命令里，所以正常情况下不需要再手工输入
 - 长期 node token 只通过 bootstrap 响应体下发，不出现在 URL 或命令参数里
-- 会创建 `nodelite-agent` 专用系统用户，并以该用户运行 systemd service
-- 会写入 `/etc/nodelite/agent.toml`，并将目录/文件权限收紧到仅 root 与该服务用户可读
-- 会生成带最小权限沙箱限制的 `nodelite-agent.service`
-- 会执行 `daemon-reload`、`enable` 和 `restart`
+- Linux:
+  会创建 `nodelite-agent` 专用系统用户，并以该用户运行 systemd service；写入 `/etc/nodelite/agent.toml`；生成带最小权限沙箱限制的 `nodelite-agent.service`；执行 `daemon-reload`、`enable` 和 `restart`
+- macOS（实验性）:
+  当前使用 root + launchd 的最小实现，不会额外创建专用服务用户；会生成 `/Library/LaunchDaemons/com.nodelite.agent.plist` 并通过 `launchctl bootstrap/kickstart` 启动；日志默认落到 `/var/log/nodelite-agent.log` 与 `/var/log/nodelite-agent.err.log`
 
 ### 子机安装步骤
 
 推荐按下面顺序操作：
 
 1. 在服务端执行 `install-agent`
-2. 复制它打印出的安装命令到目标 Linux 子机
+2. 复制它打印出的安装命令到目标子机（Linux 正式支持，macOS 为实验性支持）
 3. 子机直接执行
 4. 等脚本结束后检查服务状态
 
 检查 Agent 服务：
 
 ```bash
+# Linux
 sudo systemctl status nodelite-agent.service
 sudo journalctl -u nodelite-agent.service -f
+
+# macOS (experimental)
+sudo launchctl print system/com.nodelite.agent
+sudo tail -f /var/log/nodelite-agent.log /var/log/nodelite-agent.err.log
 ```
 
 如果你想手工运行安装脚本，也可以：
@@ -656,10 +661,10 @@ curl -fsSL https://monitor.example.com/install/install-agent.sh | \
 升级模式会：
 
 - 只替换 agent 二进制
-- 重写并补齐 systemd service
+- Linux 下重写并补齐 systemd service；macOS 下重写并重载 launchd plist
 - 保留现有 `/etc/nodelite/agent.toml`
 - 自动修正目录和文件权限
-- 清理旧版本曾经写入的 `nodelite-agent-auto-update.*` 定时更新单元
+- Linux 下清理旧版本曾经写入的 `nodelite-agent-auto-update.*` 定时更新单元
 
 如果你在升级时也传了 `--bootstrap-url` 和 install token，它会顺手刷新 agent 配置。
 
@@ -687,7 +692,7 @@ sh scripts/install-agent.sh \
 
 ## 手工 Agent 启动
 
-如果你暂时不想用安装脚本，也可以手工部署 agent。macOS 当前推荐直接下载 GitHub Release 里的 `nodelite-agent-x86_64-apple-darwin` / `nodelite-agent-aarch64-apple-darwin`，再按这一种方式运行；安装脚本仍仅覆盖 Linux。
+如果你暂时不想用安装脚本，也可以手工部署 agent。macOS 如果不想使用实验性的安装脚本，仍推荐直接下载 GitHub Release 里的 `nodelite-agent-x86_64-apple-darwin` / `nodelite-agent-aarch64-apple-darwin`，再按这一种方式运行。
 
 1. 复制配置：
 

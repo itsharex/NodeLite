@@ -4,8 +4,9 @@
 # 主要流程:
 #   1. 解析命令行参数与环境变量,确认目标架构与下载源。
 #   2. 创建专用服务用户、目录,并按需调用引导接口拉取 agent.toml。
-#   3. 校验二进制 SHA-256,落盘到 /usr/local/bin,并写入 systemd unit。
-#   4. 写入 systemd unit 并启动 / 重启 agent 服务。
+#   3. 校验二进制 SHA-256,落盘到 /usr/local/bin,并写入 systemd unit /
+#      launchd plist。
+#   4. 启动 / 重启 agent 服务。
 #
 # 该脚本设计为可被 `curl ... | sh` 直接执行,所以全部用 POSIX shell 实现,
 # 不依赖 bash 特性。所有失败都通过 `fail` 输出统一前缀并以非零状态退出。
@@ -30,6 +31,15 @@ shell_quote() {
   printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\"'\"'/g")"
 }
 
+xml_escape() {
+  printf '%s' "$1" | sed \
+    -e 's/&/\&amp;/g' \
+    -e 's/</\&lt;/g' \
+    -e 's/>/\&gt;/g' \
+    -e 's/"/\&quot;/g' \
+    -e "s/'/\&apos;/g"
+}
+
 # ---- 命令行 / 环境变量入参 ----
 BOOTSTRAP_URL=""
 INSTALL_TOKEN="${NODELITE_AGENT_INSTALL_TOKEN:-}"
@@ -47,7 +57,15 @@ SERVICE_GROUP="nodelite-agent"
 STATE_DIR="/var/lib/nodelite-agent"
 BIN_PATH=""
 CONFIG_PATH=""
+OS_NAME=""
+SERVICE_KIND=""
 UNIT_PATH="/etc/systemd/system/nodelite-agent.service"
+LAUNCHD_LABEL="com.nodelite.agent"
+PLIST_PATH="/Library/LaunchDaemons/com.nodelite.agent.plist"
+LAUNCHD_STDOUT_PATH="/var/log/nodelite-agent.log"
+LAUNCHD_STDERR_PATH="/var/log/nodelite-agent.err.log"
+SERVICE_DEFINITION_PATH=""
+SERVICE_STATUS_NAME=""
 LEGACY_AUTO_UPDATE_HELPER_PATH="/usr/local/bin/nodelite-agent-auto-update"
 LEGACY_AUTO_UPDATE_SERVICE_PATH="/etc/systemd/system/nodelite-agent-auto-update.service"
 LEGACY_AUTO_UPDATE_TIMER_PATH="/etc/systemd/system/nodelite-agent-auto-update.timer"
@@ -231,14 +249,200 @@ resolve_release_base_url() {
   esac
 }
 
+configure_platform() {
+  OS_NAME="$(uname -s)"
+  case "$OS_NAME" in
+    Linux)
+      SERVICE_KIND="systemd"
+      SERVICE_DEFINITION_PATH="$UNIT_PATH"
+      SERVICE_STATUS_NAME="nodelite-agent.service"
+      ;;
+    Darwin)
+      SERVICE_KIND="launchd"
+      SERVICE_DEFINITION_PATH="$PLIST_PATH"
+      SERVICE_STATUS_NAME="$LAUNCHD_LABEL"
+      ;;
+    *)
+      fail "unsupported operating system: $OS_NAME"
+      ;;
+  esac
+}
+
+prepare_service_account() {
+  if [ "$SERVICE_KIND" = "systemd" ]; then
+    ensure_service_account
+    SERVICE_GROUP="$(id -gn "$SERVICE_USER")"
+    return 0
+  fi
+
+  SERVICE_USER="root"
+  SERVICE_GROUP="$(id -gn root)"
+}
+
+prepare_directories() {
+  mkdir -p "$INSTALL_DIR" "$CONFIG_DIR" "$STATE_DIR"
+  chown root:root "$INSTALL_DIR"
+  chmod 0755 "$INSTALL_DIR"
+
+  if [ "$SERVICE_KIND" = "systemd" ]; then
+    chown root:"$SERVICE_GROUP" "$CONFIG_DIR" "$STATE_DIR"
+    chmod 0750 "$CONFIG_DIR" "$STATE_DIR"
+    return 0
+  fi
+
+  chown root:"$SERVICE_GROUP" "$CONFIG_DIR" "$STATE_DIR"
+  chmod 0700 "$CONFIG_DIR" "$STATE_DIR"
+}
+
+install_agent_config() {
+  config_mode="0640"
+  if [ "$SERVICE_KIND" = "launchd" ]; then
+    config_mode="0600"
+  fi
+
+  if [ "$config_refreshed" -eq 1 ]; then
+    install -o root -g "$SERVICE_GROUP" -m "$config_mode" "$BOOTSTRAP_TMP" "$CONFIG_PATH"
+    return 0
+  fi
+
+  chown root:"$SERVICE_GROUP" "$CONFIG_PATH"
+  chmod "$config_mode" "$CONFIG_PATH"
+}
+
 # 自动更新支持已移除。升级时顺手清理旧版本曾经写入的 timer / service,
 # 避免无人值守任务继续从 latest 通道自我替换 agent。
 cleanup_legacy_auto_update() {
+  if [ "$SERVICE_KIND" != "systemd" ]; then
+    return 0
+  fi
+
   systemctl disable --now nodelite-agent-auto-update.timer >/dev/null 2>&1 || true
   systemctl disable nodelite-agent-auto-update.service >/dev/null 2>&1 || true
   rm -f "$LEGACY_AUTO_UPDATE_HELPER_PATH" \
     "$LEGACY_AUTO_UPDATE_SERVICE_PATH" \
     "$LEGACY_AUTO_UPDATE_TIMER_PATH"
+}
+
+write_systemd_unit() {
+  cat >"$UNIT_PATH" <<EOF
+[Unit]
+Description=NodeLite Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=$BIN_PATH --config $CONFIG_PATH
+Restart=always
+RestartSec=3
+TimeoutStopSec=15s
+User=$SERVICE_USER
+Group=$SERVICE_GROUP
+WorkingDirectory=$STATE_DIR
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallFilter=@system-service
+
+[Install]
+WantedBy=multi-user.target
+EOF
+}
+
+write_launchd_plist() {
+  escaped_bin_path="$(xml_escape "$BIN_PATH")"
+  escaped_config_path="$(xml_escape "$CONFIG_PATH")"
+  escaped_state_dir="$(xml_escape "$STATE_DIR")"
+  escaped_stdout_path="$(xml_escape "$LAUNCHD_STDOUT_PATH")"
+  escaped_stderr_path="$(xml_escape "$LAUNCHD_STDERR_PATH")"
+
+  cat >"$PLIST_PATH" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>$LAUNCHD_LABEL</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$escaped_bin_path</string>
+    <string>--config</string>
+    <string>$escaped_config_path</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>$escaped_state_dir</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>Umask</key>
+  <integer>63</integer>
+  <key>StandardOutPath</key>
+  <string>$escaped_stdout_path</string>
+  <key>StandardErrorPath</key>
+  <string>$escaped_stderr_path</string>
+</dict>
+</plist>
+EOF
+  chown root:wheel "$PLIST_PATH"
+  chmod 0644 "$PLIST_PATH"
+  if command -v plutil >/dev/null 2>&1; then
+    plutil -lint "$PLIST_PATH" >/dev/null || fail "generated launchd plist is invalid"
+  fi
+}
+
+write_service_definition() {
+  if [ "$SERVICE_KIND" = "systemd" ]; then
+    write_systemd_unit
+    return 0
+  fi
+
+  : >>"$LAUNCHD_STDOUT_PATH"
+  : >>"$LAUNCHD_STDERR_PATH"
+  chown root:"$SERVICE_GROUP" "$LAUNCHD_STDOUT_PATH" "$LAUNCHD_STDERR_PATH"
+  chmod 0600 "$LAUNCHD_STDOUT_PATH" "$LAUNCHD_STDERR_PATH"
+  write_launchd_plist
+}
+
+restart_systemd_service() {
+  systemctl daemon-reload
+  cleanup_legacy_auto_update
+  systemctl daemon-reload
+  systemctl enable nodelite-agent.service
+  systemctl restart nodelite-agent.service
+}
+
+restart_launchd_service() {
+  launchctl bootout system "$PLIST_PATH" >/dev/null 2>&1 || \
+    launchctl bootout "system/$LAUNCHD_LABEL" >/dev/null 2>&1 || true
+  launchctl bootstrap system "$PLIST_PATH" || fail "failed to bootstrap launchd service"
+  launchctl enable "system/$LAUNCHD_LABEL" >/dev/null 2>&1 || true
+  launchctl kickstart -k "system/$LAUNCHD_LABEL" || fail "failed to start launchd service"
+}
+
+restart_service() {
+  if [ "$SERVICE_KIND" = "systemd" ]; then
+    restart_systemd_service
+    return 0
+  fi
+
+  restart_launchd_service
 }
 
 while [ "$#" -gt 0 ]; do
@@ -326,6 +530,8 @@ Notes:
   This script no longer installs unattended auto-update timers. Use
   --mode upgrade manually, or trigger an upgrade from the authenticated
   dashboard after checking the target release.
+  macOS uses an experimental launchd path and currently keeps the agent
+  running as root instead of provisioning a dedicated service account.
 EOF
       exit 0
       ;;
@@ -350,24 +556,37 @@ need_cmd rm
 need_cmd sed
 need_cmd chown
 need_cmd chmod
-need_cmd systemctl
+configure_platform
+
+if [ "$SERVICE_KIND" = "systemd" ]; then
+  need_cmd systemctl
+else
+  need_cmd launchctl
+fi
 
 ARCH="$(uname -m)"
 case "$ARCH" in
   x86_64|amd64)
-    TARGET="x86_64-unknown-linux-musl"
-    ARTIFACT_NAME="nodelite-agent-$TARGET"
     EXPECTED_SHA256="$SHA256_X86_64"
+    if [ "$SERVICE_KIND" = "systemd" ]; then
+      TARGET="x86_64-unknown-linux-musl"
+    else
+      TARGET="x86_64-apple-darwin"
+    fi
     ;;
   aarch64|arm64)
-    TARGET="aarch64-unknown-linux-musl"
-    ARTIFACT_NAME="nodelite-agent-$TARGET"
     EXPECTED_SHA256="$SHA256_AARCH64"
+    if [ "$SERVICE_KIND" = "systemd" ]; then
+      TARGET="aarch64-unknown-linux-musl"
+    else
+      TARGET="aarch64-apple-darwin"
+    fi
     ;;
   *)
     fail "unsupported architecture: $ARCH"
     ;;
 esac
+ARTIFACT_NAME="nodelite-agent-$TARGET"
 
 if [ -n "$BINARY_URL" ]; then
   DOWNLOAD_URL="$BINARY_URL"
@@ -380,7 +599,7 @@ BIN_PATH="$INSTALL_DIR/nodelite-agent"
 CONFIG_PATH="$CONFIG_DIR/agent.toml"
 
 existing_install=0
-if [ -e "$CONFIG_PATH" ] || [ -e "$UNIT_PATH" ] || [ -e "$BIN_PATH" ]; then
+if [ -e "$CONFIG_PATH" ] || [ -e "$SERVICE_DEFINITION_PATH" ] || [ -e "$BIN_PATH" ]; then
   existing_install=1
 fi
 
@@ -403,13 +622,8 @@ if [ "$MODE" = "install" ] && [ -z "$BOOTSTRAP_URL" ]; then
   fail "install mode requires --bootstrap-url"
 fi
 
-ensure_service_account
-SERVICE_GROUP="$(id -gn "$SERVICE_USER")"
-mkdir -p "$INSTALL_DIR" "$CONFIG_DIR" "$STATE_DIR"
-chown root:root "$INSTALL_DIR"
-chmod 0755 "$INSTALL_DIR"
-chown root:"$SERVICE_GROUP" "$CONFIG_DIR" "$STATE_DIR"
-chmod 0750 "$CONFIG_DIR" "$STATE_DIR"
+prepare_service_account
+prepare_directories
 
 TMP_PATH="$(mktemp "$INSTALL_DIR/nodelite-agent.XXXXXX")"
 BOOTSTRAP_TMP="$(mktemp "$CONFIG_DIR/agent.toml.XXXXXX")"
@@ -432,56 +646,9 @@ ACTUAL_SHA256="$(calculate_sha256 "$TMP_PATH")"
 [ "$ACTUAL_SHA256" = "$EXPECTED_SHA256" ] || fail "downloaded agent checksum mismatch"
 
 install -o root -g root -m 0755 "$TMP_PATH" "$BIN_PATH"
-if [ "$config_refreshed" -eq 1 ]; then
-  install -o root -g "$SERVICE_GROUP" -m 0640 "$BOOTSTRAP_TMP" "$CONFIG_PATH"
-else
-  chown root:"$SERVICE_GROUP" "$CONFIG_PATH"
-  chmod 0640 "$CONFIG_PATH"
-fi
-
-cat >"$UNIT_PATH" <<EOF
-[Unit]
-Description=NodeLite Agent
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-ExecStart=$BIN_PATH --config $CONFIG_PATH
-Restart=always
-RestartSec=3
-TimeoutStopSec=15s
-User=$SERVICE_USER
-Group=$SERVICE_GROUP
-WorkingDirectory=$STATE_DIR
-UMask=0077
-NoNewPrivileges=true
-PrivateTmp=true
-ProtectHome=true
-ProtectSystem=full
-ProtectKernelTunables=true
-ProtectKernelModules=true
-ProtectKernelLogs=true
-ProtectControlGroups=true
-RestrictSUIDSGID=true
-RestrictRealtime=true
-RestrictNamespaces=true
-LockPersonality=true
-MemoryDenyWriteExecute=true
-SystemCallArchitectures=native
-CapabilityBoundingSet=
-RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
-SystemCallFilter=@system-service
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-systemctl daemon-reload
-cleanup_legacy_auto_update
-systemctl daemon-reload
-systemctl enable nodelite-agent.service
-systemctl restart nodelite-agent.service
+install_agent_config
+write_service_definition
+restart_service
 
 if [ "$MODE" = "upgrade" ]; then
   printf '%s\n' "NodeLite agent upgraded and restarted."
@@ -489,4 +656,10 @@ else
   printf '%s\n' "NodeLite agent installed and started."
 fi
 printf '%s\n' "Config: $CONFIG_PATH"
-printf '%s\n' "Service: nodelite-agent.service"
+if [ "$SERVICE_KIND" = "launchd" ]; then
+  printf '%s\n' "Service: $SERVICE_STATUS_NAME (experimental macOS launchd support)"
+  printf '%s\n' "Plist: $PLIST_PATH"
+  printf '%s\n' "Logs: $LAUNCHD_STDOUT_PATH / $LAUNCHD_STDERR_PATH"
+else
+  printf '%s\n' "Service: $SERVICE_STATUS_NAME"
+fi

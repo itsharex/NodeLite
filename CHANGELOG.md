@@ -13,7 +13,7 @@
 
 ### 变更
 - 补充 macOS Agent 从源码构建与运行的文档。
-- README 更新 Agent 官方发布范围说明，明确 macOS 仍建议手工部署。
+- README 更新 Agent 官方发布范围说明，明确 macOS 安装链路仍属实验性支持。
 - 更新服务端 README 中的性能基线说明。
 - 优化 Web UI 架构图注释的中文表达、布局平衡和标签间距。
 - WebSocket 线协议升级到 v2:Agent 首帧 CPU 使用率未知时上报 `null`,Server 继续兼容 v1 Agent。
