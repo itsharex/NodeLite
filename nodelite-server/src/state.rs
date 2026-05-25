@@ -28,26 +28,12 @@ pub(crate) use self::session_control::{
     SessionCommand, SessionCommandError, SessionControlHandle, SessionRefreshReply,
 };
 use self::sqlite_wal::SqliteWalCheckpointObserver;
-use self::view_cache::{JsonViewSlot, ReadinessSnapshot, ViewCache};
+use self::view_cache::{JsonViewSlot, MetricsViewSlot, ReadinessSnapshot};
 
 #[derive(Debug, Clone, Copy)]
 enum ApiBodyKind {
     Nodes,
     Overview,
-}
-
-fn json_slot(cache: &ViewCache, kind: ApiBodyKind) -> &JsonViewSlot {
-    match kind {
-        ApiBodyKind::Nodes => &cache.nodes,
-        ApiBodyKind::Overview => &cache.overview,
-    }
-}
-
-fn json_slot_mut(cache: &mut ViewCache, kind: ApiBodyKind) -> &mut JsonViewSlot {
-    match kind {
-        ApiBodyKind::Nodes => &mut cache.nodes,
-        ApiBodyKind::Overview => &mut cache.overview,
-    }
 }
 use crate::ServerReadiness;
 use crate::handlers::metrics_exporter::{
@@ -61,7 +47,9 @@ pub struct SharedState {
     registry: Arc<RwLock<Registry>>,
     next_session_id: Arc<AtomicU64>,
     view_revision: Arc<AtomicU64>,
-    view_cache: Arc<Mutex<ViewCache>>,
+    overview_cache: Arc<Mutex<JsonViewSlot>>,
+    nodes_cache: Arc<Mutex<JsonViewSlot>>,
+    metrics_cache: Arc<Mutex<MetricsViewSlot>>,
     api_nodes_cache_build_lock: Arc<Mutex<()>>,
     api_overview_cache_build_lock: Arc<Mutex<()>>,
     metrics_cache_build_lock: Arc<Mutex<()>>,
@@ -91,7 +79,9 @@ impl SharedState {
             registry: Arc::new(RwLock::new(Registry::default())),
             next_session_id: Arc::new(AtomicU64::new(1)),
             view_revision: Arc::new(AtomicU64::new(1)),
-            view_cache: Arc::new(Mutex::new(ViewCache::default())),
+            overview_cache: Arc::new(Mutex::new(JsonViewSlot::default())),
+            nodes_cache: Arc::new(Mutex::new(JsonViewSlot::default())),
+            metrics_cache: Arc::new(Mutex::new(MetricsViewSlot::default())),
             api_nodes_cache_build_lock: Arc::new(Mutex::new(())),
             api_overview_cache_build_lock: Arc::new(Mutex::new(())),
             metrics_cache_build_lock: Arc::new(Mutex::new(())),
@@ -309,8 +299,8 @@ impl SharedState {
         let max_age = Duration::from_secs(self.config.refresh_interval_secs.max(1));
 
         {
-            let cache = self.view_cache.lock().await;
-            if let Some(body) = cache.metrics.get(revision, readiness_snapshot, max_age) {
+            let cache = self.metrics_cache.lock().await;
+            if let Some(body) = cache.get(revision, readiness_snapshot, max_age) {
                 self.record_metrics_cache_hit();
                 return body;
             }
@@ -320,8 +310,8 @@ impl SharedState {
         let revision = self.view_revision.load(Ordering::Acquire);
         let readiness_snapshot = ReadinessSnapshot::capture(readiness);
         {
-            let cache = self.view_cache.lock().await;
-            if let Some(body) = cache.metrics.get(revision, readiness_snapshot, max_age) {
+            let cache = self.metrics_cache.lock().await;
+            if let Some(body) = cache.get(revision, readiness_snapshot, max_age) {
                 self.record_metrics_cache_hit();
                 return body;
             }
@@ -338,8 +328,8 @@ impl SharedState {
             .store(body.len() as u64, Ordering::Relaxed);
 
         if self.view_revision.load(Ordering::Acquire) == revision {
-            let mut cache = self.view_cache.lock().await;
-            cache.metrics.store(revision, readiness_snapshot, body.clone());
+            let mut cache = self.metrics_cache.lock().await;
+            cache.store(revision, readiness_snapshot, body.clone());
         }
 
         body
@@ -369,11 +359,19 @@ impl SharedState {
         self.view_revision.fetch_add(1, Ordering::AcqRel);
     }
 
+    fn json_slot_for(&self, kind: ApiBodyKind) -> &Arc<Mutex<JsonViewSlot>> {
+        match kind {
+            ApiBodyKind::Nodes => &self.nodes_cache,
+            ApiBodyKind::Overview => &self.overview_cache,
+        }
+    }
+
     async fn cached_api_json_bytes(&self, kind: ApiBodyKind) -> Result<Bytes, serde_json::Error> {
+        let slot = self.json_slot_for(kind);
         let revision = self.view_revision.load(Ordering::Acquire);
         {
-            let cache = self.view_cache.lock().await;
-            if let Some(body) = json_slot(&cache, kind).get(revision) {
+            let cache = slot.lock().await;
+            if let Some(body) = cache.get(revision) {
                 self.record_api_cache_hit(kind);
                 return Ok(body);
             }
@@ -386,8 +384,8 @@ impl SharedState {
         let _build_guard = build_lock.lock().await;
         let revision = self.view_revision.load(Ordering::Acquire);
         {
-            let cache = self.view_cache.lock().await;
-            if let Some(body) = json_slot(&cache, kind).get(revision) {
+            let cache = slot.lock().await;
+            if let Some(body) = cache.get(revision) {
                 self.record_api_cache_hit(kind);
                 return Ok(body);
             }
@@ -408,8 +406,8 @@ impl SharedState {
         self.record_api_body_bytes(kind, body.len());
 
         if self.view_revision.load(Ordering::Acquire) == revision {
-            let mut cache = self.view_cache.lock().await;
-            json_slot_mut(&mut cache, kind).store(revision, body.clone());
+            let mut cache = slot.lock().await;
+            cache.store(revision, body.clone());
         }
 
         Ok(body)

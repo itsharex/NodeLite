@@ -91,12 +91,3 @@ impl MetricsViewSlot {
     }
 }
 
-/// 旧的"单缓存条目"包装:仍是 SharedState 持有的唯一 ViewCache 类型,但内部按视图独立持槽。
-///
-/// 拆分锁与拆分 revision 的步骤会在后续 commit 引入,这里仅做结构重组。
-#[derive(Debug, Default)]
-pub(super) struct ViewCache {
-    pub(super) overview: JsonViewSlot,
-    pub(super) nodes: JsonViewSlot,
-    pub(super) metrics: MetricsViewSlot,
-}
