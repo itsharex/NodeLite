@@ -491,7 +491,6 @@ fn render_snapshot_metrics(emitter: &mut MetricEmitter, node_id: &str, snapshot:
         );
     }
     render_memory_metrics(emitter, node_id, snapshot);
-    render_disk_metrics(emitter, node_id, snapshot);
     render_load_metrics(emitter, node_id, snapshot);
     render_network_metrics(emitter, node_id, snapshot);
 }
@@ -508,23 +507,6 @@ fn render_memory_metrics(emitter: &mut MetricEmitter, node_id: &str, snapshot: &
             &[("node_id", node_id), ("state", state)],
             value,
         );
-    }
-}
-
-fn render_disk_metrics(emitter: &mut MetricEmitter, node_id: &str, snapshot: &NodeSnapshot) {
-    for disk in &snapshot.disks {
-        for (state, value) in [("total", disk.total_bytes), ("used", disk.used_bytes)] {
-            emitter.gauge(
-                "nodelite_node_disk_bytes",
-                "Latest per-mount disk totals reported by the node.",
-                &[
-                    ("node_id", node_id),
-                    ("mount", disk.mount_point.as_str()),
-                    ("state", state),
-                ],
-                value,
-            );
-        }
     }
 }
 
@@ -725,9 +707,7 @@ mod tests {
                 .count(),
             6
         );
-        assert!(body.contains(
-            "nodelite_node_disk_bytes{node_id=\"node-1\",mount=\"/\",state=\"used\"} 500"
-        ));
+        assert!(!body.contains("nodelite_node_disk_bytes{"));
         assert!(
             body.contains("nodelite_node_load_average{node_id=\"node-2\",window=\"15m\"} 0.75")
         );
