@@ -124,18 +124,6 @@ async fn initialize_server_runtime(
     restore_snapshot_if_available(&shared, config.snapshot_path.as_path()).await;
 
     let shutdown = CancellationToken::new();
-    let background_tasks = spawn_server_background_tasks(
-        &config,
-        registry.clone(),
-        history.clone(),
-        agent_logs.clone(),
-        audit_log.clone(),
-        readiness.clone(),
-        shared.clone(),
-        shutdown.clone(),
-    );
-    log_registry_loaded(&config, &registry).await;
-
     let state = AppState {
         history,
         agent_logs,
@@ -153,6 +141,8 @@ async fn initialize_server_runtime(
         config_path: Arc::new(config_path.to_path_buf()),
         shutdown,
     };
+    let background_tasks = spawn_server_background_tasks(&config, &state);
+    log_registry_loaded(&config, &state.registry).await;
     let shutdown_artifacts = ShutdownArtifacts {
         shared: state.shared.clone(),
         history: state.history.clone(),
@@ -166,27 +156,28 @@ async fn initialize_server_runtime(
     })
 }
 
-fn spawn_server_background_tasks(
-    config: &ServerConfig,
-    registry: NodeRegistry,
-    history: HistoryStore,
-    agent_logs: AgentLogStore,
-    audit_log: AuditLog,
-    readiness: ServerReadiness,
-    shared: SharedState,
-    shutdown: CancellationToken,
-) -> Vec<JoinHandle<()>> {
+fn spawn_server_background_tasks(config: &ServerConfig, state: &AppState) -> Vec<JoinHandle<()>> {
     let mut background_tasks = vec![
-        spawn_registry_reloader(registry, history, agent_logs, readiness, shutdown.clone()),
-        audit_log.spawn_pruner(shutdown.clone()),
-        spawn_stale_reaper(shared.clone(), shutdown.clone()),
-        spawn_snapshot_persistor(shared, config.snapshot_path.clone(), shutdown.clone()),
+        spawn_registry_reloader(
+            state.registry.clone(),
+            state.history.clone(),
+            state.agent_logs.clone(),
+            state.readiness.clone(),
+            state.shutdown.clone(),
+        ),
+        state.audit_log.clone().spawn_pruner(state.shutdown.clone()),
+        spawn_stale_reaper(state.shared.clone(), state.shutdown.clone()),
+        spawn_snapshot_persistor(
+            state.shared.clone(),
+            config.snapshot_path.clone(),
+            state.shutdown.clone(),
+        ),
     ];
     if let Some(handle) = spawn_insecure_transport_warning(
         config.public_base_url.clone(),
         config.listen,
         config.insecure_transport_warn_interval_secs,
-        shutdown,
+        state.shutdown.clone(),
     ) {
         background_tasks.push(handle);
     }

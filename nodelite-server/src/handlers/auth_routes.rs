@@ -329,9 +329,7 @@ fn evaluate_readonly_auth(
     headers: &HeaderMap,
     request: &Request,
 ) -> Option<(bool, bool)> {
-    if auth.expected_authorization.is_none() {
-        return None;
-    }
+    auth.expected_authorization.as_ref()?;
     if auth.enable_2fa && has_authenticated_two_factor_cookie(state, headers) {
         return None;
     }
