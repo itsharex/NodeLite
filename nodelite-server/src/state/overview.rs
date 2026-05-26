@@ -3,10 +3,6 @@
 use chrono::Utc;
 use nodelite_proto::{NodeStatus, OverviewData};
 
-pub(super) fn build_overview(statuses: &[NodeStatus]) -> OverviewData {
-    build_overview_from_iter(statuses.iter())
-}
-
 pub(super) fn build_overview_from_iter<'a>(
     statuses: impl IntoIterator<Item = &'a NodeStatus>,
 ) -> OverviewData {
@@ -76,7 +72,7 @@ mod tests {
         LoadAverage, MemoryUsage, NetworkCounters, NodeIdentity, NodeSnapshot, NodeStatus,
     };
 
-    use super::build_overview;
+    use super::build_overview_from_iter;
 
     fn status(
         node_id: &str,
@@ -155,7 +151,7 @@ mod tests {
             ),
         ];
 
-        let overview = build_overview(&statuses);
+        let overview = build_overview_from_iter(statuses.iter());
         assert_eq!(overview.total_nodes, 3);
         assert_eq!(overview.online_nodes, 2);
         assert_eq!(overview.offline_nodes, 1);
@@ -183,7 +179,7 @@ mod tests {
             ),
         ];
 
-        let overview = build_overview(&statuses);
+        let overview = build_overview_from_iter(statuses.iter());
         assert_eq!(overview.current_rx_bytes_per_sec, 0.0);
         assert_eq!(overview.current_tx_bytes_per_sec, f64::MAX);
         assert_eq!(overview.average_latency_ms, None);

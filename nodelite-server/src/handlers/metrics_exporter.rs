@@ -5,9 +5,18 @@ use crate::ServerReadiness;
 use crate::agent_logs::AgentLogStats;
 use nodelite_proto::{NodeSnapshot, NodeStatus, OverviewData};
 
+#[cfg(test)]
 pub(crate) fn render_prometheus_metrics(
     readiness: &ServerReadiness,
     statuses: &[NodeStatus],
+    overview: &OverviewData,
+) -> String {
+    render_prometheus_metrics_from_iter(readiness, statuses.iter(), overview)
+}
+
+pub(crate) fn render_prometheus_metrics_from_iter<'a>(
+    readiness: &ServerReadiness,
+    statuses: impl IntoIterator<Item = &'a NodeStatus>,
     overview: &OverviewData,
 ) -> String {
     let mut emitter = MetricEmitter::default();

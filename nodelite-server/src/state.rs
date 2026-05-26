@@ -44,7 +44,7 @@ enum ApiBodyKind {
 const OVERVIEW_CACHE_MAX_STALE: Duration = Duration::from_secs(1);
 use crate::ServerReadiness;
 use crate::handlers::metrics_exporter::{
-    ApiCacheMetrics, SqliteWalCheckpointMetrics, WsMessageMetrics, render_prometheus_metrics,
+    ApiCacheMetrics, SqliteWalCheckpointMetrics, WsMessageMetrics,
 };
 
 /// 共享状态的对外句柄,可以低成本地克隆给每个异步任务。
@@ -342,8 +342,10 @@ impl SharedState {
         #[cfg(test)]
         self.metrics_cache_builds.fetch_add(1, Ordering::Relaxed);
 
-        let (statuses, overview) = self.statuses_and_overview().await;
-        let body = Bytes::from(render_prometheus_metrics(readiness, &statuses, &overview));
+        let body = {
+            let registry = self.registry.read().await;
+            Bytes::from(registry.render_metrics_body(readiness))
+        };
         self.metrics_body_bytes
             .store(body.len() as u64, Ordering::Relaxed);
 
@@ -353,14 +355,6 @@ impl SharedState {
         }
 
         body
-    }
-
-    /// 返回当前对外视图需要的节点状态与聚合概览。
-    pub async fn statuses_and_overview(&self) -> (Vec<NodeStatus>, OverviewData) {
-        let registry = self.registry.read().await;
-        let statuses = registry.list_statuses();
-        let overview = registry.overview_from_statuses(&statuses);
-        (statuses, overview)
     }
 
     async fn overview_data(&self) -> OverviewData {

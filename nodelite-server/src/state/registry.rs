@@ -6,8 +6,10 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use nodelite_proto::{NodeIdentity, NodeListItem, NodeSnapshot, NodeStatus, OverviewData};
 
-use super::overview::{build_overview, build_overview_from_iter};
+use super::overview::build_overview_from_iter;
 use super::session_control::SessionControlHandle;
+use crate::ServerReadiness;
+use crate::handlers::metrics_exporter::render_prometheus_metrics_from_iter;
 
 #[derive(Debug, Default)]
 pub(super) struct Registry {
@@ -199,8 +201,16 @@ impl Registry {
         build_overview_from_iter(self.nodes.values().map(|entry| &entry.status))
     }
 
-    pub(super) fn overview_from_statuses(&self, statuses: &[NodeStatus]) -> OverviewData {
-        build_overview(statuses)
+    pub(super) fn render_metrics_body(&self, readiness: &ServerReadiness) -> String {
+        let overview = self.overview();
+        render_prometheus_metrics_from_iter(
+            readiness,
+            self.sorted_node_ids
+                .iter()
+                .filter_map(|node_id| self.nodes.get(node_id))
+                .map(|entry| &entry.status),
+            &overview,
+        )
     }
 
     pub(super) fn disk_entries_total(&self) -> u64 {
