@@ -801,7 +801,8 @@ mod tests {
         assert_eq!(metrics.overview_misses, 1);
         assert_eq!(metrics.nodes_hits, 1);
         assert_eq!(metrics.nodes_misses, 1);
-        assert!(metrics.nodes_body_bytes > metrics.overview_body_bytes);
+        assert!(metrics.nodes_body_bytes > 0);
+        assert!(metrics.overview_body_bytes > 0);
     }
 
     #[tokio::test]

@@ -135,7 +135,7 @@ mod tests {
 
     #[test]
     fn build_overview_counts_online_latency_and_snapshots() {
-        let statuses = vec![
+        let statuses = [
             status(
                 "hk-01",
                 true,
@@ -164,7 +164,7 @@ mod tests {
 
     #[test]
     fn build_overview_ignores_invalid_rates_and_clamps_overflow() {
-        let statuses = vec![
+        let statuses = [
             status(
                 "hk-01",
                 true,
