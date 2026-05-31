@@ -1,11 +1,27 @@
 import type {
   AgentLogEntry,
+  AlertRuleView,
+  AlertSettingsResponse,
+  AlertSettingsView,
+  AlertSmtpSettingsView,
+  AlertWebhookSettingsView,
+  AlertPreview,
   BootstrapResponse,
+  InspectionSettingsView,
   NodeListItem,
   NodeStatus,
   OverviewData,
   SettingsResponse,
 } from '@/api';
+
+/** Override shape for the alert View fixture: nested channels accept partials. */
+interface AlertSettingsViewOverrides {
+  enabled?: boolean;
+  smtp?: Partial<AlertSmtpSettingsView>;
+  webhook?: Partial<AlertWebhookSettingsView>;
+  rules?: AlertRuleView[];
+  inspection?: Partial<InspectionSettingsView>;
+}
 
 export function makeSettings(overrides: Partial<SettingsResponse> = {}): SettingsResponse {
   const base: SettingsResponse = {
@@ -168,5 +184,94 @@ export function makeOverview(overrides: Partial<OverviewData> = {}): OverviewDat
     current_tx_bytes_per_sec: 20,
     average_latency_ms: 7.5,
     ...overrides,
+  };
+}
+
+export function makeAlertSettingsView(overrides: AlertSettingsViewOverrides = {}): AlertSettingsView {
+  const base: AlertSettingsView = {
+    enabled: true,
+    smtp: {
+      enabled: true,
+      host: 'smtp.example.com',
+      port: 587,
+      username: 'mailer',
+      sender: 'alerts@example.com',
+      recipients: ['ops@example.com'],
+      transport: 'start_tls',
+      send_resolved: true,
+      password_configured: true,
+    },
+    webhook: {
+      enabled: false,
+      url: '',
+      send_resolved: true,
+      secret_configured: false,
+    },
+    rules: [
+      {
+        id: 'cpu-hot',
+        name: 'CPU hot',
+        enabled: true,
+        metric: 'cpu_usage_percent',
+        comparator: 'gt',
+        threshold: 85,
+        window_minutes: 5,
+        severity: 'warning',
+        scope_mode: 'all',
+        node_ids: [],
+        tags: [],
+        delivery: ['smtp'],
+        cooldown_minutes: 30,
+        send_resolved: true,
+      },
+    ],
+    inspection: {
+      enabled: true,
+      local_time: '09:00',
+      lookback_hours: 24,
+      delivery: ['smtp'],
+      offline_grace_minutes: 10,
+      latency_warn_ms: 250,
+      cpu_warn_percent: 85,
+      memory_warn_percent: 90,
+    },
+  };
+  return {
+    ...base,
+    ...overrides,
+    smtp: { ...base.smtp, ...overrides.smtp },
+    webhook: { ...base.webhook, ...overrides.webhook },
+    inspection: { ...base.inspection, ...overrides.inspection },
+    rules: overrides.rules ?? base.rules,
+  };
+}
+
+export function makeAlertPreview(overrides: Partial<AlertPreview> = {}): AlertPreview {
+  return {
+    generated_at: '2026-05-29T00:00:00Z',
+    triggered_rules: [],
+    inspection: {
+      total_nodes: 3,
+      offline_nodes: 0,
+      latency_nodes: 0,
+      cpu_hot_nodes: 0,
+      memory_hot_nodes: 0,
+      highlights: [],
+    },
+    ...overrides,
+  };
+}
+
+interface AlertSettingsResponseOverrides {
+  config?: AlertSettingsViewOverrides;
+  preview?: Partial<AlertPreview>;
+}
+
+export function makeAlertSettings(
+  overrides: AlertSettingsResponseOverrides = {},
+): AlertSettingsResponse {
+  return {
+    config: makeAlertSettingsView(overrides.config),
+    preview: makeAlertPreview(overrides.preview),
   };
 }
