@@ -144,8 +144,10 @@ usePolling(() => {
 
 // --- Monitor zoom modal ---
 const modalMetric = ref<MonitorMetric | null>(null);
-function openZoom(metric: MonitorMetric): void {
+const modalClipSpikes = ref(true);
+function openZoom(metric: MonitorMetric, clipSpikes = true): void {
   modalMetric.value = metric;
+  modalClipSpikes.value = clipSpikes;
 }
 function closeZoom(): void {
   modalMetric.value = null;
@@ -160,16 +162,36 @@ const modalConfig = computed(() => {
   const data = buildChartData(monitorStore.points);
   switch (metric) {
     case 'cpu':
-      return { title: t('node.cpu_usage'), points: data.cpuPts, valueKind: 'percent' as const, color: 'var(--chart-cpu)' };
+      return {
+        title: t('node.cpu_usage'),
+        points: data.cpuPts,
+        valueKind: 'percent' as const,
+        color: 'var(--chart-cpu)',
+        clipSpikes: modalClipSpikes.value,
+      };
     case 'memory':
-      return { title: t('node.memory_usage'), points: data.memPts, valueKind: 'percent' as const, color: 'var(--chart-memory)', maxValue: 100 };
+      return {
+        title: t('node.memory_usage'),
+        points: data.memPts,
+        valueKind: 'percent' as const,
+        color: 'var(--chart-memory)',
+        maxValue: 100,
+        clipSpikes: modalClipSpikes.value,
+      };
     case 'latency':
-      return { title: t('node.latency_history'), points: data.rttPts, valueKind: 'latency' as const, color: 'var(--chart-latency)' };
+      return {
+        title: t('node.latency_history'),
+        points: data.rttPts,
+        valueKind: 'latency' as const,
+        color: 'var(--chart-latency)',
+        clipSpikes: modalClipSpikes.value,
+      };
     case 'network':
       return {
         title: t('node.network_traffic'),
         series: networkSeries(data, t('index.node.download'), t('index.node.upload')),
         valueKind: 'rate' as const,
+        clipSpikes: modalClipSpikes.value,
       };
   }
   return null;

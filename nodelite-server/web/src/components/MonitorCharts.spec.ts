@@ -13,6 +13,10 @@ const FAKE_DICT = {
     'node.network_traffic': 'Network Traffic',
     'node.latency_history': 'RTT',
     'node.chart.zoom': 'Open enlarged chart',
+    'node.clip.on': 'Clip Spikes: On',
+    'node.clip.off': 'Clip Spikes: Off',
+    'node.clip.on_short': 'Clip: On',
+    'node.clip.off_short': 'Clip: Off',
     'node.preset.last_3h': '3h',
     'node.preset.last_24h': '24h',
     'node.preset.last_3d': '3d',
@@ -97,6 +101,26 @@ describe('MonitorCharts', () => {
   it('emits zoom with the metric when a zoom button is clicked', async () => {
     const wrapper = mountMonitor();
     await wrapper.find('[data-test="zoom-network"]').trigger('click');
-    expect(wrapper.emitted('zoom')?.[0]).toEqual(['network']);
+    expect(wrapper.emitted('zoom')?.[0]).toEqual(['network', true]);
+  });
+
+  it('shows per-chart spike clipping toggles enabled by default', async () => {
+    const wrapper = mountMonitor();
+    const toggles = wrapper.findAll('.chart-clip-toggle');
+    expect(toggles).toHaveLength(4);
+    for (const toggle of toggles) {
+      expect(toggle.classes()).toContain('active');
+      expect(toggle.attributes('aria-pressed')).toBe('true');
+      expect(toggle.text()).toBe('Clip: On');
+    }
+
+    await wrapper.find('[data-test="clip-network"]').trigger('click');
+    expect(wrapper.find('[data-test="clip-network"]').classes()).not.toContain('active');
+    expect(wrapper.find('[data-test="clip-network"]').attributes('aria-pressed')).toBe('false');
+    expect(wrapper.find('[data-test="clip-network"]').text()).toBe('Clip: Off');
+    expect(wrapper.find('[data-test="clip-cpu"]').text()).toBe('Clip: On');
+
+    await wrapper.find('[data-test="zoom-network"]').trigger('click');
+    expect(wrapper.emitted('zoom')?.at(-1)).toEqual(['network', false]);
   });
 });
