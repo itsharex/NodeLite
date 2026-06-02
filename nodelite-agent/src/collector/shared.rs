@@ -115,6 +115,7 @@ impl NetworkRateBaselines {
         }
     }
 
+    #[cfg(target_os = "macos")]
     pub(super) fn clear(&mut self) {
         self.rx.clear();
         self.tx.clear();
@@ -171,6 +172,7 @@ impl NetworkRateBaseline {
         self.samples.push_back(rate_bytes_per_sec);
     }
 
+    #[cfg(target_os = "macos")]
     fn clear(&mut self) {
         self.samples.clear();
     }
