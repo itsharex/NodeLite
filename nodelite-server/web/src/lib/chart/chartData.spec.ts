@@ -33,6 +33,10 @@ describe('quantile', () => {
     const vals = Array.from({ length: 100 }, (_, i) => i + 1); // 1..100
     expect(quantile(vals, 0.98)).toBe(98);
   });
+  it('does not pick a single max spike in short history windows', () => {
+    const vals = [...Array.from({ length: 39 }, (_, i) => i + 1), 1000];
+    expect(quantile(vals, 0.98)).toBeLessThan(1000);
+  });
 });
 
 describe('chartBounds', () => {

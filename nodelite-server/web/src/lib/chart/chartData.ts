@@ -1,6 +1,6 @@
 /**
  * Pure chart data layer, ported from assets/node.html:2035-2147.
- * Buckets/averages history, computes display bounds (with p98 spike
+ * Buckets/averages history, computes display bounds (with high-percentile spike
  * clipping), and projects per-metric point series. No DOM.
  */
 
@@ -28,7 +28,10 @@ export interface DisplayBoundsOptions {
 export function quantile(values: number[], ratio: number): number | null {
   if (!Array.isArray(values) || values.length === 0) return null;
   const sorted = [...values].sort((a, b) => a - b);
-  const idx = Math.min(sorted.length - 1, Math.max(0, Math.ceil(sorted.length * ratio) - 1));
+  const idx = Math.min(
+    sorted.length - 1,
+    Math.max(0, Math.floor((sorted.length - 1) * ratio)),
+  );
   return sorted[idx] ?? null;
 }
 
@@ -38,13 +41,17 @@ export function chartBounds(values: number[], clipSpikes = false): ChartBounds {
   let displayMax = actualMax;
   let clipped = false;
   if (clipSpikes && values.length >= 12) {
-    const clippedMax = quantile(values, 0.98);
+    const clippedMax = quantile(values, spikeClipRatio(values.length));
     if (clippedMax != null && clippedMax > actualMin && clippedMax < actualMax) {
       displayMax = clippedMax;
       clipped = true;
     }
   }
   return { actualMin, actualMax, displayMin: actualMin, displayMax, clipped };
+}
+
+function spikeClipRatio(sampleCount: number): number {
+  return sampleCount < 100 ? 0.95 : 0.98;
 }
 
 export function chartDisplayBounds(
