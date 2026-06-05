@@ -58,6 +58,13 @@ pub struct WsAdmissionController {
     state: Arc<Mutex<WsAdmissionState>>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WsAdmissionSnapshot {
+    pub active_connections: usize,
+    pub max_total_connections: usize,
+    pub max_connections_per_ip: usize,
+}
+
 #[derive(Debug, Default)]
 struct WsAdmissionState {
     total_active_connections: usize,
@@ -154,6 +161,15 @@ impl WsAdmissionController {
     pub fn clear_auth_failures(&self, client_ip: IpAddr) {
         let mut state = self.lock_state();
         state.auth_failures.remove(&client_ip);
+    }
+
+    pub fn snapshot(&self) -> WsAdmissionSnapshot {
+        let state = self.lock_state();
+        WsAdmissionSnapshot {
+            active_connections: state.total_active_connections,
+            max_total_connections: self.config.max_total_connections,
+            max_connections_per_ip: self.config.max_connections_per_ip,
+        }
     }
 
     /// 由 `WsConnectionPermit::drop` 调用,把计数减回去。

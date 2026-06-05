@@ -75,6 +75,50 @@ fn router_builds_with_v08_path_syntax() {
 }
 
 #[test]
+fn readyz_reports_json_diagnostics_for_degraded_state() {
+    let runtime = Runtime::new().expect("runtime should build");
+    runtime.block_on(async {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be monotonic enough")
+            .as_nanos();
+        let registry_path = std::env::temp_dir().join(format!("nodelite-readyz-test-{unique}.json"));
+        let mut config = test_server_config(
+            SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 8080)),
+            "http://127.0.0.1:8080".to_string(),
+            registry_path,
+            PathBuf::from("./data/history.sqlite3"),
+            PathBuf::from("./data/snapshot.json"),
+        );
+        config.readonly_auth = None;
+        config.ws = test_ws_config(32, 8);
+        let state = AppState::test_fixture(
+            Arc::new(config),
+            Arc::new(PathBuf::from("config/server.toml")),
+        )
+        .await
+        .expect("state fixture should build");
+        state.readiness.mark_history_available(false);
+
+        let response = readyz(State(state.clone())).await.into_response();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("readyz body should collect");
+        let payload: Value = serde_json::from_slice(&body).expect("readyz body should be json");
+        assert_eq!(payload["ready"], Value::Bool(false));
+        assert_eq!(payload["status"], Value::String("degraded".to_string()));
+        assert_eq!(
+            payload["problems"],
+            Value::Array(vec![Value::String("history_unavailable".to_string())])
+        );
+
+        state.history.shutdown().await;
+        state.audit_log.shutdown().await;
+    });
+}
+
+#[test]
 fn install_endpoints_disable_caching() {
     let runtime = Runtime::new().expect("runtime should build");
     runtime.block_on(async {

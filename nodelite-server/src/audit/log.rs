@@ -120,6 +120,17 @@ impl AuditLog {
         self.dropped_writes.load(Ordering::Relaxed)
     }
 
+    pub(crate) fn enabled(&self) -> bool {
+        self.config.enabled
+    }
+
+    pub(crate) async fn is_available(&self) -> bool {
+        if !self.config.enabled {
+            return true;
+        }
+        self.writer_tx.read().await.is_some()
+    }
+
     pub(crate) fn write_failures(&self) -> u64 {
         self.write_failures.load(Ordering::Relaxed)
     }
