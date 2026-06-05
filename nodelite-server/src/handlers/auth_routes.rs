@@ -128,7 +128,11 @@ pub(crate) async fn readyz(State(state): State<AppState>) -> Response {
     }
 
     let response = ReadyzResponse {
-        status: if problems.is_empty() { "ok" } else { "degraded" },
+        status: if problems.is_empty() {
+            "ok"
+        } else {
+            "degraded"
+        },
         ready,
         problems,
         checks: ReadyzChecks {

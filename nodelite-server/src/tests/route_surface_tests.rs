@@ -82,7 +82,8 @@ fn readyz_reports_json_diagnostics_for_degraded_state() {
             .duration_since(UNIX_EPOCH)
             .expect("clock should be monotonic enough")
             .as_nanos();
-        let registry_path = std::env::temp_dir().join(format!("nodelite-readyz-test-{unique}.json"));
+        let registry_path =
+            std::env::temp_dir().join(format!("nodelite-readyz-test-{unique}.json"));
         let mut config = test_server_config(
             SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 8080)),
             "http://127.0.0.1:8080".to_string(),
