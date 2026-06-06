@@ -1,4 +1,5 @@
 use super::*;
+use nodelite_proto::NodeStatus;
 
 #[test]
 fn newer_session_replaces_older_one() {
@@ -184,6 +185,61 @@ fn mark_disconnected_clears_session_control() {
     registry.mark_disconnected("hk-01", 9);
 
     assert!(registry.session_control("hk-01").is_none());
+}
+
+#[test]
+fn runtime_entry_is_smaller_than_cached_external_models() {
+    assert!(
+        Registry::runtime_entry_inline_bytes_for_test()
+            < Registry::previous_external_model_inline_bytes_for_test(),
+        "registry entries should not inline-cache NodeStatus plus NodeListItem",
+    );
+}
+
+#[tokio::test]
+async fn restore_statuses_reassembles_detail_and_lightweight_api_views() {
+    let shared = SharedState::new(Arc::new(sample_config()));
+    let mut snapshot = sample_snapshot(Utc::now());
+    snapshot.disks.resize_with(4, sample_disk_usage);
+    let restored = NodeStatus {
+        identity: sample_identity(),
+        remote_ip: Some("198.51.100.10".to_string()),
+        geoip_country: Some("HK".to_string()),
+        geoip_city: Some("Hong Kong".to_string()),
+        geoip_latitude: Some(22.3193),
+        geoip_longitude: Some(114.1694),
+        snapshot: Some(snapshot),
+        last_seen: Some(Utc::now()),
+        latency_ms: Some(42),
+        online: true,
+    };
+
+    shared.restore_statuses(vec![restored]).await;
+
+    let detail = shared.get_status("hk-01").await.expect("restored status");
+    assert!(
+        !detail.online,
+        "restored nodes stay offline until a new session connects"
+    );
+    assert_eq!(detail.remote_ip.as_deref(), Some("198.51.100.10"));
+    assert_eq!(
+        detail
+            .snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.disks.len()),
+        Some(4),
+    );
+
+    let nodes_body = shared
+        .nodes_json_bytes()
+        .await
+        .expect("nodes api body should serialize");
+    let nodes_body = std::str::from_utf8(&nodes_body).expect("nodes body should be utf-8");
+    assert!(nodes_body.contains("\"node_id\":\"hk-01\""));
+    assert!(
+        !nodes_body.contains("\"disks\""),
+        "list API should assemble NodeListItem instead of serializing full snapshots",
+    );
 }
 
 #[tokio::test]
