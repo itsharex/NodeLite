@@ -62,14 +62,16 @@ const rows = computed(() =>
       </thead>
       <tbody>
         <tr v-for="row in rows" :key="row.id" data-test="token-row">
-          <td>
+          <td :data-label="t('settings.tokens.node')">
             {{ row.label }}<div class="subnote">{{ row.nodeId }}</div>
           </td>
-          <td>{{ row.status }}</td>
-          <td>{{ row.agent }}</td>
-          <td>{{ row.ip }}</td>
-          <td>{{ row.expiresAt }}</td>
-          <td class="numeric" :class="row.severity">{{ row.remaining }}</td>
+          <td :data-label="t('settings.tokens.status')">{{ row.status }}</td>
+          <td :data-label="t('settings.tokens.agent')">{{ row.agent }}</td>
+          <td :data-label="t('settings.tokens.ip')">{{ row.ip }}</td>
+          <td :data-label="t('settings.tokens.expires_at')">{{ row.expiresAt }}</td>
+          <td :data-label="t('settings.tokens.remaining')" class="numeric" :class="row.severity">
+            {{ row.remaining }}
+          </td>
         </tr>
       </tbody>
     </table>
@@ -125,5 +127,40 @@ const rows = computed(() =>
 }
 .ok {
   color: var(--accent-green);
+}
+@media (max-width: 640px) {
+  .tokens,
+  .tokens thead,
+  .tokens tbody,
+  .tokens tr,
+  .tokens th,
+  .tokens td {
+    display: block;
+  }
+  .tokens thead {
+    display: none;
+  }
+  .tokens tr {
+    border-bottom: 1px solid var(--border-soft);
+    padding: 10px 0;
+  }
+  .tokens tr:last-child {
+    border-bottom: 0;
+  }
+  .tokens td {
+    border-bottom: 0;
+    display: grid;
+    grid-template-columns: minmax(86px, 0.42fr) minmax(0, 1fr);
+    gap: 10px;
+    padding: 5px 0;
+    overflow-wrap: anywhere;
+  }
+  .tokens td::before {
+    content: attr(data-label);
+    color: var(--text-muted);
+  }
+  .tokens .numeric {
+    text-align: left;
+  }
 }
 </style>

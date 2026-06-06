@@ -52,7 +52,7 @@ onMounted(() => {
 }
 .settings__grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
   gap: 16px;
   align-items: start;
 }
