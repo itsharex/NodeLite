@@ -16,6 +16,9 @@ pub(crate) const HISTORY_QUERY_SQL: &str = r#"
             ?1 AS node_id,
             MAX(recorded_at) AS recorded_at,
             AVG(cpu_usage_percent) AS cpu_usage_percent,
+            AVG(load_one) AS load_one,
+            AVG(load_five) AS load_five,
+            AVG(load_fifteen) AS load_fifteen,
             AVG(memory_used_percent) AS memory_used_percent,
             AVG(rx_bytes_per_sec) AS rx_bytes_per_sec,
             AVG(tx_bytes_per_sec) AS tx_bytes_per_sec,
@@ -66,13 +69,16 @@ pub(super) fn query_history_between(
                     .single()
                     .unwrap_or_else(Utc::now),
                 cpu_usage_percent: row.get(2)?,
-                memory_used_percent: row.get(3)?,
-                rx_bytes_per_sec: row.get(4)?,
-                tx_bytes_per_sec: row.get(5)?,
+                load_one: row.get(3)?,
+                load_five: row.get(4)?,
+                load_fifteen: row.get(5)?,
+                memory_used_percent: row.get(6)?,
+                rx_bytes_per_sec: row.get(7)?,
+                tx_bytes_per_sec: row.get(8)?,
                 latency_ms: row
-                    .get::<_, Option<f64>>(6)?
+                    .get::<_, Option<f64>>(9)?
                     .map(|value| value.max(0.0).round() as u64),
-                disk_used_percent: row.get(7)?,
+                disk_used_percent: row.get(10)?,
             })
         },
     )?;

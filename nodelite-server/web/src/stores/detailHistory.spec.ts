@@ -42,7 +42,19 @@ describe('useDetailHistoryStore', () => {
 
   it('clears stale points when switching nodes', async () => {
     mockHistory.mockResolvedValueOnce([
-      { node_id: 'a', recorded_at: '2026-05-29T00:00:00Z', cpu_usage_percent: 1, memory_used_percent: 2, rx_bytes_per_sec: null, tx_bytes_per_sec: null, latency_ms: null, disk_used_percent: null },
+      {
+        node_id: 'a',
+        recorded_at: '2026-05-29T00:00:00Z',
+        cpu_usage_percent: 1,
+        load_one: null,
+        load_five: null,
+        load_fifteen: null,
+        memory_used_percent: 2,
+        rx_bytes_per_sec: null,
+        tx_bytes_per_sec: null,
+        latency_ms: null,
+        disk_used_percent: null,
+      },
     ]);
     const store = useDetailHistoryStore();
     await store.load('a');

@@ -31,28 +31,20 @@ pub(super) fn initialize_database(
             node_id TEXT NOT NULL,
             recorded_at INTEGER NOT NULL,
             cpu_usage_percent REAL,
+            load_one REAL,
+            load_five REAL,
+            load_fifteen REAL,
             memory_used_percent REAL NOT NULL,
             rx_bytes_per_sec REAL,
             tx_bytes_per_sec REAL,
             latency_ms INTEGER,
             disk_used_percent REAL
         );
-        CREATE INDEX IF NOT EXISTS idx_history_points_node_time
-            ON history_points (node_id, recorded_at);
-        CREATE INDEX IF NOT EXISTS idx_history_points_covering_metrics
-            ON history_points (
-                node_id,
-                recorded_at,
-                cpu_usage_percent,
-                memory_used_percent,
-                rx_bytes_per_sec,
-                tx_bytes_per_sec,
-                latency_ms,
-                disk_used_percent
-            );
         "#,
     )?;
     migrate_nullable_cpu_usage(&connection)?;
+    migrate_history_metric_columns(&connection)?;
+    ensure_history_indexes(&connection)?;
     harden_database_artifacts(db_path)?;
 
     Ok(connection)
@@ -82,6 +74,9 @@ fn migrate_nullable_cpu_usage(connection: &Connection) -> Result<()> {
             node_id TEXT NOT NULL,
             recorded_at INTEGER NOT NULL,
             cpu_usage_percent REAL,
+            load_one REAL,
+            load_five REAL,
+            load_fifteen REAL,
             memory_used_percent REAL NOT NULL,
             rx_bytes_per_sec REAL,
             tx_bytes_per_sec REAL,
@@ -92,6 +87,9 @@ fn migrate_nullable_cpu_usage(connection: &Connection) -> Result<()> {
             node_id,
             recorded_at,
             cpu_usage_percent,
+            load_one,
+            load_five,
+            load_fifteen,
             memory_used_percent,
             rx_bytes_per_sec,
             tx_bytes_per_sec,
@@ -102,6 +100,9 @@ fn migrate_nullable_cpu_usage(connection: &Connection) -> Result<()> {
             node_id,
             recorded_at,
             cpu_usage_percent,
+            NULL,
+            NULL,
+            NULL,
             memory_used_percent,
             rx_bytes_per_sec,
             tx_bytes_per_sec,
@@ -109,6 +110,70 @@ fn migrate_nullable_cpu_usage(connection: &Connection) -> Result<()> {
             disk_used_percent
         FROM history_points_legacy_not_null_cpu;
         DROP TABLE history_points_legacy_not_null_cpu;
+        "#,
+    )?;
+    Ok(())
+}
+
+fn migrate_history_metric_columns(connection: &Connection) -> Result<()> {
+    let existing_columns = connection
+        .prepare("PRAGMA table_info(history_points)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    for (column, sql) in [
+        (
+            "load_one",
+            "ALTER TABLE history_points ADD COLUMN load_one REAL",
+        ),
+        (
+            "load_five",
+            "ALTER TABLE history_points ADD COLUMN load_five REAL",
+        ),
+        (
+            "load_fifteen",
+            "ALTER TABLE history_points ADD COLUMN load_fifteen REAL",
+        ),
+    ] {
+        if !existing_columns.iter().any(|existing| existing == column) {
+            connection.execute(sql, [])?;
+        }
+    }
+    Ok(())
+}
+
+fn ensure_history_indexes(connection: &Connection) -> Result<()> {
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_history_points_node_time ON history_points (node_id, recorded_at)",
+        [],
+    )?;
+
+    let expected_covering_columns = [
+        "node_id",
+        "recorded_at",
+        "cpu_usage_percent",
+        "load_one",
+        "load_five",
+        "load_fifteen",
+        "memory_used_percent",
+        "rx_bytes_per_sec",
+        "tx_bytes_per_sec",
+        "latency_ms",
+        "disk_used_percent",
+    ];
+    let existing_covering_columns = covering_index_columns(connection)?;
+    if existing_covering_columns
+        .as_deref()
+        .is_some_and(|columns| columns == expected_covering_columns)
+    {
+        return Ok(());
+    }
+
+    connection.execute(
+        "DROP INDEX IF EXISTS idx_history_points_covering_metrics",
+        [],
+    )?;
+    connection.execute_batch(
+        r#"
         CREATE INDEX IF NOT EXISTS idx_history_points_node_time
             ON history_points (node_id, recorded_at);
         CREATE INDEX IF NOT EXISTS idx_history_points_covering_metrics
@@ -116,6 +181,9 @@ fn migrate_nullable_cpu_usage(connection: &Connection) -> Result<()> {
                 node_id,
                 recorded_at,
                 cpu_usage_percent,
+                load_one,
+                load_five,
+                load_fifteen,
                 memory_used_percent,
                 rx_bytes_per_sec,
                 tx_bytes_per_sec,
@@ -125,6 +193,23 @@ fn migrate_nullable_cpu_usage(connection: &Connection) -> Result<()> {
         "#,
     )?;
     Ok(())
+}
+
+fn covering_index_columns(connection: &Connection) -> Result<Option<Vec<String>>> {
+    let exists: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = ?1",
+        ["idx_history_points_covering_metrics"],
+        |row| row.get(0),
+    )?;
+    if exists == 0 {
+        return Ok(None);
+    }
+    let mut statement =
+        connection.prepare("PRAGMA index_info(idx_history_points_covering_metrics)")?;
+    let columns = statement
+        .query_map([], |row| row.get::<_, String>(2))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(Some(columns))
 }
 
 /// 打开查询专用连接。初始化阶段已经确保库文件和 schema 存在,

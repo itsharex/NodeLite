@@ -63,6 +63,9 @@ export interface HistoryPoint {
   node_id: string;
   recorded_at: string;
   cpu_usage_percent: number | null;
+  load_one: number | null;
+  load_five: number | null;
+  load_fifteen: number | null;
   memory_used_percent: number;
   rx_bytes_per_sec: number | null;
   tx_bytes_per_sec: number | null;

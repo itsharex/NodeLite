@@ -22,6 +22,9 @@ fn history_database_artifacts_are_mode_600() {
                 node_id: "hk-01".to_string(),
                 recorded_at: Utc::now(),
                 cpu_usage_percent: Some(1.0),
+                load_one: Some(1.1),
+                load_five: Some(1.2),
+                load_fifteen: Some(1.3),
                 memory_used_percent: 2.0,
                 rx_bytes_per_sec: Some(3.0),
                 tx_bytes_per_sec: Some(4.0),
@@ -139,6 +142,16 @@ fn history_accepts_unknown_cpu_usage_after_schema_migration() {
         )
         .expect("cpu column metadata should be readable");
     assert_eq!(cpu_not_null, 0);
+    for column in ["load_one", "load_five", "load_fifteen"] {
+        let count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('history_points') WHERE name = ?1",
+                [column],
+                |row| row.get(0),
+            )
+            .expect("load column metadata should be readable");
+        assert_eq!(count, 1);
+    }
 
     let recorded_at = Utc::now();
     write_history_point(
@@ -148,6 +161,9 @@ fn history_accepts_unknown_cpu_usage_after_schema_migration() {
             node_id: "hk-01".to_string(),
             recorded_at,
             cpu_usage_percent: None,
+            load_one: Some(0.4),
+            load_five: Some(0.5),
+            load_fifteen: Some(0.6),
             memory_used_percent: 50.0,
             rx_bytes_per_sec: None,
             tx_bytes_per_sec: None,
@@ -169,6 +185,75 @@ fn history_accepts_unknown_cpu_usage_after_schema_migration() {
     .expect("history query should succeed");
     assert_eq!(points.len(), 1);
     assert_eq!(points[0].cpu_usage_percent, None);
+    assert_eq!(points[0].load_one, Some(0.4));
+    assert_eq!(points[0].load_five, Some(0.5));
+    assert_eq!(points[0].load_fifteen, Some(0.6));
+
+    let _ = std::fs::remove_file(&db_path);
+    let _ = std::fs::remove_dir(&temp_dir);
+}
+
+#[test]
+fn history_adds_load_columns_to_existing_schema() {
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock should be monotonic enough")
+        .as_nanos();
+    let temp_dir = std::env::temp_dir().join(format!("nodelite-history-load-migration-{unique}"));
+    std::fs::create_dir_all(&temp_dir).expect("temp dir should exist");
+    let db_path = temp_dir.join("history.sqlite3");
+    {
+        let connection = rusqlite::Connection::open(&db_path).expect("legacy database should open");
+        connection
+            .execute_batch(
+                r#"
+                CREATE TABLE history_points (
+                    node_id TEXT NOT NULL,
+                    recorded_at INTEGER NOT NULL,
+                    cpu_usage_percent REAL,
+                    memory_used_percent REAL NOT NULL,
+                    rx_bytes_per_sec REAL,
+                    tx_bytes_per_sec REAL,
+                    latency_ms INTEGER,
+                    disk_used_percent REAL
+                );
+                CREATE INDEX idx_history_points_covering_metrics
+                    ON history_points (
+                        node_id,
+                        recorded_at,
+                        cpu_usage_percent,
+                        memory_used_percent,
+                        rx_bytes_per_sec,
+                        tx_bytes_per_sec,
+                        latency_ms,
+                        disk_used_percent
+                    );
+                "#,
+            )
+            .expect("legacy schema should be created");
+    }
+
+    let connection = initialize_database(&db_path, 5).expect("database should migrate");
+    for column in ["load_one", "load_five", "load_fifteen"] {
+        let count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('history_points') WHERE name = ?1",
+                [column],
+                |row| row.get(0),
+            )
+            .expect("load column metadata should be readable");
+        assert_eq!(count, 1);
+    }
+    let index_columns = connection
+        .prepare("PRAGMA index_info(idx_history_points_covering_metrics)")
+        .expect("covering index metadata should prepare")
+        .query_map([], |row| row.get::<_, String>(2))
+        .expect("covering index metadata should query")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("covering index columns should decode");
+    assert!(index_columns.iter().any(|column| column == "load_one"));
+    assert!(index_columns.iter().any(|column| column == "load_five"));
+    assert!(index_columns.iter().any(|column| column == "load_fifteen"));
 
     let _ = std::fs::remove_file(&db_path);
     let _ = std::fs::remove_dir(&temp_dir);

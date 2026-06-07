@@ -171,6 +171,12 @@ pub struct HistoryPoint {
     pub node_id: String,
     pub recorded_at: DateTime<Utc>,
     pub cpu_usage_percent: Option<f64>,
+    #[serde(default)]
+    pub load_one: Option<f64>,
+    #[serde(default)]
+    pub load_five: Option<f64>,
+    #[serde(default)]
+    pub load_fifteen: Option<f64>,
     pub memory_used_percent: f64,
     pub rx_bytes_per_sec: Option<f64>,
     pub tx_bytes_per_sec: Option<f64>,

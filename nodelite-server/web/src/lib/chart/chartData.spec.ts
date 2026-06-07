@@ -16,6 +16,9 @@ function hp(recorded_at: string, over: Partial<HistoryPoint> = {}): HistoryPoint
     node_id: 'n',
     recorded_at,
     cpu_usage_percent: null,
+    load_one: null,
+    load_five: null,
+    load_fifteen: null,
     memory_used_percent: 0,
     rx_bytes_per_sec: null,
     tx_bytes_per_sec: null,
@@ -135,9 +138,13 @@ describe('chartPoints / averageValue / buildChartData', () => {
   it('averages values, counting null as 0 (legacy Number(null)===0 quirk)', () => {
     // node.html:2105 maps value via Number() then filters isFinite; null→0
     // passes, so a null point drags the mean. Kept for parity.
-    expect(averageValue([{ ts: 1, value: 10 }, { ts: 2, value: null }, { ts: 3, value: 30 }])).toBe(
-      40 / 3,
-    );
+    expect(
+      averageValue([
+        { ts: 1, value: 10 },
+        { ts: 2, value: null },
+        { ts: 3, value: 30 },
+      ]),
+    ).toBe(40 / 3);
     expect(averageValue([{ ts: 1, value: null }])).toBe(0);
   });
 
@@ -145,6 +152,9 @@ describe('chartPoints / averageValue / buildChartData', () => {
     const data = buildChartData([
       hp('2026-05-29T00:00:00Z', {
         cpu_usage_percent: 1,
+        load_one: 1.1,
+        load_five: 1.2,
+        load_fifteen: 1.3,
         memory_used_percent: 2,
         rx_bytes_per_sec: 3,
         tx_bytes_per_sec: 4,
@@ -152,6 +162,9 @@ describe('chartPoints / averageValue / buildChartData', () => {
       }),
     ]);
     expect(data.cpuPts[0]!.value).toBe(1);
+    expect(data.loadOnePts[0]!.value).toBe(1.1);
+    expect(data.loadFivePts[0]!.value).toBe(1.2);
+    expect(data.loadFifteenPts[0]!.value).toBe(1.3);
     expect(data.memPts[0]!.value).toBe(2);
     expect(data.dlPts[0]!.value).toBe(3);
     expect(data.upPts[0]!.value).toBe(4);

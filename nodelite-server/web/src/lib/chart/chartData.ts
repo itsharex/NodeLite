@@ -28,10 +28,7 @@ export interface DisplayBoundsOptions {
 export function quantile(values: number[], ratio: number): number | null {
   if (!Array.isArray(values) || values.length === 0) return null;
   const sorted = [...values].sort((a, b) => a - b);
-  const idx = Math.min(
-    sorted.length - 1,
-    Math.max(0, Math.floor((sorted.length - 1) * ratio)),
-  );
+  const idx = Math.min(sorted.length - 1, Math.max(0, Math.floor((sorted.length - 1) * ratio)));
   return sorted[idx] ?? null;
 }
 
@@ -127,6 +124,9 @@ export interface AggregatedPoint {
   ts: number;
   recorded_at: string;
   cpu_usage_percent: number | null;
+  load_one: number | null;
+  load_five: number | null;
+  load_fifteen: number | null;
   memory_used_percent: number | null;
   rx_bytes_per_sec: number | null;
   tx_bytes_per_sec: number | null;
@@ -145,23 +145,37 @@ export function aggregateHistory(
   if (!Array.isArray(history) || history.length === 0) return [];
   const buckets = new Map<
     number,
-    { ts: number; cpu: Acc; memory: Acc; rx: Acc; tx: Acc; latency: Acc }
+    {
+      ts: number;
+      cpu: Acc;
+      loadOne: Acc;
+      loadFive: Acc;
+      loadFifteen: Acc;
+      memory: Acc;
+      rx: Acc;
+      tx: Acc;
+      latency: Acc;
+    }
   >();
   for (const point of history) {
     const ms = Date.parse(point.recorded_at);
     if (!Number.isFinite(ms)) continue;
     const bucket = Math.floor(ms / bucketMs) * bucketMs;
-    const item =
-      buckets.get(bucket) ??
-      {
-        ts: bucket,
-        cpu: { sum: 0, count: 0 },
-        memory: { sum: 0, count: 0 },
-        rx: { sum: 0, count: 0 },
-        tx: { sum: 0, count: 0 },
-        latency: { sum: 0, count: 0 },
-      };
+    const item = buckets.get(bucket) ?? {
+      ts: bucket,
+      cpu: { sum: 0, count: 0 },
+      loadOne: { sum: 0, count: 0 },
+      loadFive: { sum: 0, count: 0 },
+      loadFifteen: { sum: 0, count: 0 },
+      memory: { sum: 0, count: 0 },
+      rx: { sum: 0, count: 0 },
+      tx: { sum: 0, count: 0 },
+      latency: { sum: 0, count: 0 },
+    };
     add(item.cpu, point.cpu_usage_percent);
+    add(item.loadOne, point.load_one);
+    add(item.loadFive, point.load_five);
+    add(item.loadFifteen, point.load_fifteen);
     add(item.memory, point.memory_used_percent);
     add(item.rx, point.rx_bytes_per_sec);
     add(item.tx, point.tx_bytes_per_sec);
@@ -174,6 +188,9 @@ export function aggregateHistory(
       ts: item.ts,
       recorded_at: new Date(item.ts).toISOString(),
       cpu_usage_percent: avg(item.cpu),
+      load_one: avg(item.loadOne),
+      load_five: avg(item.loadFive),
+      load_fifteen: avg(item.loadFifteen),
       memory_used_percent: avg(item.memory),
       rx_bytes_per_sec: avg(item.rx),
       tx_bytes_per_sec: avg(item.tx),
@@ -196,6 +213,9 @@ export function averageValue(points: ChartPoint[]): number | null {
 export interface ChartData {
   chartHistory: AggregatedPoint[];
   cpuPts: ChartPoint[];
+  loadOnePts: ChartPoint[];
+  loadFivePts: ChartPoint[];
+  loadFifteenPts: ChartPoint[];
   memPts: ChartPoint[];
   dlPts: ChartPoint[];
   upPts: ChartPoint[];
@@ -210,6 +230,9 @@ export function buildChartData(
   return {
     chartHistory,
     cpuPts: chartPoints(chartHistory, 'cpu_usage_percent'),
+    loadOnePts: chartPoints(chartHistory, 'load_one'),
+    loadFivePts: chartPoints(chartHistory, 'load_five'),
+    loadFifteenPts: chartPoints(chartHistory, 'load_fifteen'),
     memPts: chartPoints(chartHistory, 'memory_used_percent'),
     dlPts: chartPoints(chartHistory, 'rx_bytes_per_sec'),
     upPts: chartPoints(chartHistory, 'tx_bytes_per_sec'),

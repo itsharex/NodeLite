@@ -27,6 +27,9 @@ function hp(recorded_at: string, over: Partial<HistoryPoint> = {}): HistoryPoint
     node_id: 'n',
     recorded_at,
     cpu_usage_percent: 10,
+    load_one: null,
+    load_five: null,
+    load_fifteen: null,
     memory_used_percent: 20,
     rx_bytes_per_sec: 100,
     tx_bytes_per_sec: 50,
@@ -59,8 +62,13 @@ describe('OverviewCharts', () => {
   it('renders four chart cards, each with a MetricChart', () => {
     const wrapper = mount(OverviewCharts, {
       props: {
-        node: makeNodeStatus({ snapshot: { ...makeNodeStatus().snapshot!, cpu_usage_percent: 42 } }),
-        history: [hp('2026-05-29T00:00:00Z'), hp('2026-05-29T00:01:00Z', { cpu_usage_percent: 60 })],
+        node: makeNodeStatus({
+          snapshot: { ...makeNodeStatus().snapshot!, cpu_usage_percent: 42 },
+        }),
+        history: [
+          hp('2026-05-29T00:00:00Z'),
+          hp('2026-05-29T00:01:00Z', { cpu_usage_percent: 60 }),
+        ],
       },
       global: { plugins: [getI18n()] },
     });
@@ -75,7 +83,13 @@ describe('OverviewCharts', () => {
           snapshot: {
             ...makeNodeStatus().snapshot!,
             cpu_usage_percent: 42,
-            memory: { total_bytes: 100, used_bytes: 25, available_bytes: 75, swap_total_bytes: 0, swap_used_bytes: 0 },
+            memory: {
+              total_bytes: 100,
+              used_bytes: 25,
+              available_bytes: 75,
+              swap_total_bytes: 0,
+              swap_used_bytes: 0,
+            },
           },
           latency_ms: 7,
         }),
