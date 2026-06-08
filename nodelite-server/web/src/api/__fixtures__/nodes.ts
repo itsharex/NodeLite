@@ -163,6 +163,7 @@ export function makeNodeStatus(overrides: Partial<NodeStatus> = {}): NodeStatus 
               total_tx_bytes: 2000,
               rx_bytes_per_sec: 10,
               tx_bytes_per_sec: 20,
+              packet_loss_percent: 0.2,
             },
           },
     last_seen: 'last_seen' in overrides ? (overrides.last_seen ?? null) : '2026-05-29T00:00:00Z',

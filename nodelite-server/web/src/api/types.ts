@@ -70,6 +70,7 @@ export interface HistoryPoint {
   rx_bytes_per_sec: number | null;
   tx_bytes_per_sec: number | null;
   latency_ms: number | null;
+  packet_loss_percent: number | null;
   disk_used_percent: number | null;
 }
 
@@ -124,6 +125,7 @@ export interface NetworkCounters {
   total_tx_bytes: number;
   rx_bytes_per_sec: number | null;
   tx_bytes_per_sec: number | null;
+  packet_loss_percent: number | null;
 }
 
 export interface NodeSnapshot {

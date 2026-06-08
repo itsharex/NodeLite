@@ -8,7 +8,9 @@ use anyhow::{Result, anyhow};
 use nodelite_proto::{DiskUsage, LoadAverage, MemoryUsage, percentage};
 use tracing::warn;
 
-use super::super::shared::{CpuSample, NetworkSample, NetworkTotals, compute_network_rates};
+use super::super::shared::{
+    CpuSample, NetworkMetrics, NetworkSample, NetworkTotals, compute_network_metrics,
+};
 use super::syscall;
 
 #[derive(Debug, Clone)]
@@ -166,16 +168,16 @@ pub(super) fn collect_network_totals(cache: &mut NetworkInterfaceCache) -> Resul
     })
 }
 
-pub(super) fn compute_network_rates_if_same_interfaces(
+pub(super) fn compute_network_metrics_if_same_interfaces(
     previous: &ObservedNetworkSample,
     observed_at: Instant,
     current: NetworkTotals,
     current_signature: &NetworkInterfaceSignature,
-) -> (Option<f64>, Option<f64>) {
+) -> NetworkMetrics {
     if &previous.signature != current_signature {
-        return (None, None);
+        return NetworkMetrics::default();
     }
-    compute_network_rates(previous.sample, observed_at, current)
+    compute_network_metrics(previous.sample, observed_at, current)
 }
 
 /// 优先用缓存接口 index + `IFMIB_IFDATA` 读取 64-bit 网卡计数。
@@ -214,6 +216,9 @@ fn collect_network_totals_and_indices_via_iflist2(len: usize) -> Result<(Network
     let mut indices = Vec::new();
     let mut rx_bytes = 0_u64;
     let mut tx_bytes = 0_u64;
+    let mut rx_packets = 0_u64;
+    let mut tx_packets = 0_u64;
+    let mut rx_dropped_packets = 0_u64;
     let mut next = buffer.as_ptr();
     let end = unsafe { next.add(buffer.len()) };
 
@@ -236,18 +241,34 @@ fn collect_network_totals_and_indices_via_iflist2(len: usize) -> Result<(Network
                 let data = unsafe { &(*ifm2).ifm_data };
                 rx_bytes = rx_bytes.saturating_add(data.ifi_ibytes);
                 tx_bytes = tx_bytes.saturating_add(data.ifi_obytes);
+                rx_packets = rx_packets.saturating_add(data.ifi_ipackets);
+                tx_packets = tx_packets.saturating_add(data.ifi_opackets);
+                rx_dropped_packets = rx_dropped_packets.saturating_add(data.ifi_iqdrops);
             }
         }
 
         next = unsafe { next.add(message_len) };
     }
 
-    Ok((NetworkTotals { rx_bytes, tx_bytes }, indices))
+    Ok((
+        NetworkTotals {
+            rx_bytes,
+            tx_bytes,
+            rx_packets,
+            tx_packets,
+            rx_dropped_packets,
+            tx_dropped_packets: 0,
+        },
+        indices,
+    ))
 }
 
 fn collect_cached_network_totals(cache: &NetworkInterfaceCache) -> Result<NetworkTotals> {
     let mut rx_bytes = 0_u64;
     let mut tx_bytes = 0_u64;
+    let mut rx_packets = 0_u64;
+    let mut tx_packets = 0_u64;
+    let mut rx_dropped_packets = 0_u64;
     for index in &cache.indices {
         let data = syscall::collect_interface_data(*index)?;
         if data.ifmd_flags & libc::IFF_LOOPBACK as libc::c_uint != 0
@@ -257,8 +278,18 @@ fn collect_cached_network_totals(cache: &NetworkInterfaceCache) -> Result<Networ
         }
         rx_bytes = rx_bytes.saturating_add(data.ifmd_data.ifi_ibytes);
         tx_bytes = tx_bytes.saturating_add(data.ifmd_data.ifi_obytes);
+        rx_packets = rx_packets.saturating_add(data.ifmd_data.ifi_ipackets);
+        tx_packets = tx_packets.saturating_add(data.ifmd_data.ifi_opackets);
+        rx_dropped_packets = rx_dropped_packets.saturating_add(data.ifmd_data.ifi_iqdrops);
     }
-    Ok(NetworkTotals { rx_bytes, tx_bytes })
+    Ok(NetworkTotals {
+        rx_bytes,
+        tx_bytes,
+        rx_packets,
+        tx_packets,
+        rx_dropped_packets,
+        tx_dropped_packets: 0,
+    })
 }
 
 impl NetworkInterfaceCache {
@@ -279,6 +310,9 @@ fn collect_network_totals_via_ifaddrs() -> Result<NetworkReading> {
     let mut sampled_names = Vec::new();
     let mut rx_bytes = 0_u64;
     let mut tx_bytes = 0_u64;
+    let mut rx_packets = 0_u64;
+    let mut tx_packets = 0_u64;
+    let mut rx_dropped_packets = 0_u64;
     let mut current = addrs.as_ptr();
     while !current.is_null() {
         let iface = unsafe { &*current };
@@ -296,13 +330,23 @@ fn collect_network_totals_via_ifaddrs() -> Result<NetworkReading> {
                 let data = unsafe { &*(iface.ifa_data as *const libc::if_data) };
                 rx_bytes = rx_bytes.saturating_add(u64::from(data.ifi_ibytes));
                 tx_bytes = tx_bytes.saturating_add(u64::from(data.ifi_obytes));
+                rx_packets = rx_packets.saturating_add(u64::from(data.ifi_ipackets));
+                tx_packets = tx_packets.saturating_add(u64::from(data.ifi_opackets));
+                rx_dropped_packets = rx_dropped_packets.saturating_add(u64::from(data.ifi_iqdrops));
             }
         }
         current = iface.ifa_next;
     }
 
     Ok(NetworkReading {
-        totals: NetworkTotals { rx_bytes, tx_bytes },
+        totals: NetworkTotals {
+            rx_bytes,
+            tx_bytes,
+            rx_packets,
+            tx_packets,
+            rx_dropped_packets,
+            tx_dropped_packets: 0,
+        },
         signature: NetworkInterfaceSignature::from_names(sampled_names),
     })
 }

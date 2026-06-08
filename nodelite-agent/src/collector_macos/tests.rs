@@ -1,10 +1,10 @@
 use std::time::{Duration, Instant};
 
-use super::super::shared::{NetworkSample, NetworkTotals, compute_network_rates};
+use super::super::shared::{NetworkSample, NetworkTotals, compute_network_metrics};
 use super::identity::{extract_plist_value, parse_os_name_from_plist};
 use super::metrics::{
     NetworkInterfaceCache, NetworkInterfaceSignature, ObservedNetworkSample,
-    compute_available_memory_bytes, compute_network_rates_if_same_interfaces,
+    compute_available_memory_bytes, compute_network_metrics_if_same_interfaces,
 };
 
 #[test]
@@ -73,40 +73,57 @@ fn computes_network_rates_from_deltas() {
         observed_at: Instant::now() - Duration::from_secs(2),
         rx_bytes: 100,
         tx_bytes: 40,
+        rx_packets: 10,
+        tx_packets: 4,
+        rx_dropped_packets: 0,
+        tx_dropped_packets: 0,
     };
     let current = NetworkTotals {
         rx_bytes: 220,
         tx_bytes: 100,
+        rx_packets: 22,
+        tx_packets: 10,
+        rx_dropped_packets: 0,
+        tx_dropped_packets: 0,
     };
-    let (rx_rate, tx_rate) = compute_network_rates(previous, Instant::now(), current);
-    assert!(rx_rate.expect("rx rate should be present") > 50.0);
-    assert!(tx_rate.expect("tx rate should be present") > 20.0);
+    let metrics = compute_network_metrics(previous, Instant::now(), current);
+    assert!(metrics.rx_bytes_per_sec.expect("rx rate should be present") > 50.0);
+    assert!(metrics.tx_bytes_per_sec.expect("tx rate should be present") > 20.0);
 }
 
 #[test]
-fn skips_network_rates_when_interface_signature_changes() {
+fn skips_network_metrics_when_interface_signature_changes() {
     let previous = ObservedNetworkSample {
         sample: NetworkSample {
             observed_at: Instant::now() - Duration::from_secs(2),
             rx_bytes: 100,
             tx_bytes: 40,
+            rx_packets: 10,
+            tx_packets: 4,
+            rx_dropped_packets: 0,
+            tx_dropped_packets: 0,
         },
         signature: NetworkInterfaceSignature::from_indices(&[4]),
     };
     let current = NetworkTotals {
         rx_bytes: 10_000_000_000,
         tx_bytes: 4_000_000_000,
+        rx_packets: 10_000,
+        tx_packets: 4_000,
+        rx_dropped_packets: 10,
+        tx_dropped_packets: 0,
     };
 
-    let (rx_rate, tx_rate) = compute_network_rates_if_same_interfaces(
+    let metrics = compute_network_metrics_if_same_interfaces(
         &previous,
         Instant::now(),
         current,
         &NetworkInterfaceSignature::from_indices(&[4, 5]),
     );
 
-    assert_eq!(rx_rate, None);
-    assert_eq!(tx_rate, None);
+    assert_eq!(metrics.rx_bytes_per_sec, None);
+    assert_eq!(metrics.tx_bytes_per_sec, None);
+    assert_eq!(metrics.packet_loss_percent, None);
 }
 
 #[test]

@@ -43,6 +43,7 @@ function hp(recorded_at: string): HistoryPoint {
     rx_bytes_per_sec: 100,
     tx_bytes_per_sec: 50,
     latency_ms: 5,
+    packet_loss_percent: 0.2,
     disk_used_percent: null,
   };
 }

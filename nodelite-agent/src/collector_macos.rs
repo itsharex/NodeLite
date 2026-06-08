@@ -70,6 +70,10 @@ impl HostCollector {
                     totals: NetworkTotals {
                         rx_bytes: 0,
                         tx_bytes: 0,
+                        rx_packets: 0,
+                        tx_packets: 0,
+                        rx_dropped_packets: 0,
+                        tx_dropped_packets: 0,
                     },
                     signature: NetworkInterfaceSignature::empty(),
                 }
@@ -82,28 +86,32 @@ impl HostCollector {
             .previous_network
             .as_ref()
             .is_some_and(|previous| previous.signature != network_signature);
-        let (rx_bytes_per_sec, tx_bytes_per_sec) = if let Some(previous) = &self.previous_network {
-            metrics::compute_network_rates_if_same_interfaces(
+        let network_metrics = if let Some(previous) = &self.previous_network {
+            metrics::compute_network_metrics_if_same_interfaces(
                 previous,
                 observed_at,
                 network_totals,
                 &network_signature,
             )
         } else {
-            (None, None)
+            Default::default()
         };
         if interfaces_changed {
             self.network_rate_baselines.clear();
         }
-        super::log_network_rate_anomalies(
-            self.network_rate_baselines
-                .observe(rx_bytes_per_sec, tx_bytes_per_sec),
-        );
+        super::log_network_rate_anomalies(self.network_rate_baselines.observe(
+            network_metrics.rx_bytes_per_sec,
+            network_metrics.tx_bytes_per_sec,
+        ));
         self.previous_network = Some(ObservedNetworkSample {
             sample: NetworkSample {
                 observed_at,
                 rx_bytes: network_totals.rx_bytes,
                 tx_bytes: network_totals.tx_bytes,
+                rx_packets: network_totals.rx_packets,
+                tx_packets: network_totals.tx_packets,
+                rx_dropped_packets: network_totals.rx_dropped_packets,
+                tx_dropped_packets: network_totals.tx_dropped_packets,
             },
             signature: network_signature,
         });
@@ -139,8 +147,9 @@ impl HostCollector {
             network: NetworkCounters {
                 total_rx_bytes: network_totals.rx_bytes,
                 total_tx_bytes: network_totals.tx_bytes,
-                rx_bytes_per_sec,
-                tx_bytes_per_sec,
+                rx_bytes_per_sec: network_metrics.rx_bytes_per_sec,
+                tx_bytes_per_sec: network_metrics.tx_bytes_per_sec,
+                packet_loss_percent: network_metrics.packet_loss_percent,
             },
         })
     }

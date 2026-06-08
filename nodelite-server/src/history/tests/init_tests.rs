@@ -29,6 +29,7 @@ fn history_database_artifacts_are_mode_600() {
                 rx_bytes_per_sec: Some(3.0),
                 tx_bytes_per_sec: Some(4.0),
                 latency_ms: Some(5),
+                packet_loss_percent: Some(0.5),
                 disk_used_percent: Some(6.0),
             },
             None,
@@ -142,7 +143,12 @@ fn history_accepts_unknown_cpu_usage_after_schema_migration() {
         )
         .expect("cpu column metadata should be readable");
     assert_eq!(cpu_not_null, 0);
-    for column in ["load_one", "load_five", "load_fifteen"] {
+    for column in [
+        "load_one",
+        "load_five",
+        "load_fifteen",
+        "packet_loss_percent",
+    ] {
         let count: i64 = connection
             .query_row(
                 "SELECT COUNT(*) FROM pragma_table_info('history_points') WHERE name = ?1",
@@ -168,6 +174,7 @@ fn history_accepts_unknown_cpu_usage_after_schema_migration() {
             rx_bytes_per_sec: None,
             tx_bytes_per_sec: None,
             latency_ms: None,
+            packet_loss_percent: Some(0.25),
             disk_used_percent: None,
         },
         None,
@@ -188,6 +195,7 @@ fn history_accepts_unknown_cpu_usage_after_schema_migration() {
     assert_eq!(points[0].load_one, Some(0.4));
     assert_eq!(points[0].load_five, Some(0.5));
     assert_eq!(points[0].load_fifteen, Some(0.6));
+    assert_eq!(points[0].packet_loss_percent, Some(0.25));
 
     let _ = std::fs::remove_file(&db_path);
     let _ = std::fs::remove_dir(&temp_dir);
@@ -234,7 +242,12 @@ fn history_adds_load_columns_to_existing_schema() {
     }
 
     let connection = initialize_database(&db_path, 5).expect("database should migrate");
-    for column in ["load_one", "load_five", "load_fifteen"] {
+    for column in [
+        "load_one",
+        "load_five",
+        "load_fifteen",
+        "packet_loss_percent",
+    ] {
         let count: i64 = connection
             .query_row(
                 "SELECT COUNT(*) FROM pragma_table_info('history_points') WHERE name = ?1",

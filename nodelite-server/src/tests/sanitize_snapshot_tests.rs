@@ -116,6 +116,7 @@ fn sanitize_snapshot_clamps_invalid_metrics() {
             total_tx_bytes: 2,
             rx_bytes_per_sec: Some(-10.0),
             tx_bytes_per_sec: Some(f64::INFINITY),
+            packet_loss_percent: Some(125.0),
         },
     };
 
@@ -127,6 +128,7 @@ fn sanitize_snapshot_clamps_invalid_metrics() {
     assert_eq!(sanitized.memory.available_bytes, 0);
     assert_eq!(sanitized.memory.swap_used_bytes, 50);
     assert_eq!(sanitized.network.rx_bytes_per_sec, Some(0.0));
+    assert_eq!(sanitized.network.packet_loss_percent, Some(100.0));
     assert_eq!(
         sanitized.network.tx_bytes_per_sec,
         Some(MAX_SANITIZED_RATE_BYTES_PER_SEC)
@@ -137,7 +139,7 @@ fn sanitize_snapshot_clamps_invalid_metrics() {
     assert_eq!(sanitized.disks[0].fs_type, "ext4");
     assert_eq!(sanitized.disks[0].used_bytes, 20);
     assert_eq!(sanitized.disks[0].used_percent, 20.0);
-    assert_eq!(report.clamped_percents, 1);
+    assert_eq!(report.clamped_percents, 2);
     assert_eq!(report.clamped_loads, 3);
     assert_eq!(report.clamped_memory_bytes, 1);
     assert_eq!(report.clamped_disk_bytes, 1);
@@ -177,6 +179,7 @@ fn sanitize_snapshot_preserves_unknown_cpu_usage() {
             total_tx_bytes: 2,
             rx_bytes_per_sec: None,
             tx_bytes_per_sec: None,
+            packet_loss_percent: None,
         },
     };
 
@@ -269,6 +272,7 @@ fn sanitize_caps_disk_field_string_length() {
             total_tx_bytes: 0,
             rx_bytes_per_sec: None,
             tx_bytes_per_sec: None,
+            packet_loss_percent: None,
         },
     };
 
@@ -367,6 +371,7 @@ fn sanitize_snapshot_caps_disk_count_and_tracks_clean_reports() {
             total_tx_bytes: 2,
             rx_bytes_per_sec: Some(3.0),
             tx_bytes_per_sec: Some(4.0),
+            packet_loss_percent: Some(0.0),
         },
     };
 
@@ -495,6 +500,7 @@ fn sanitize_snapshot_deduplicates_repeated_disk_devices() {
             total_tx_bytes: 2,
             rx_bytes_per_sec: Some(3.0),
             tx_bytes_per_sec: Some(4.0),
+            packet_loss_percent: Some(0.0),
         },
     };
 

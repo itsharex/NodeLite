@@ -17,7 +17,7 @@ use tracing::warn;
 
 use super::shared::{
     CpuSample, NetworkRateBaselines, NetworkSample, NetworkTotals, compute_cpu_usage,
-    compute_network_rates,
+    compute_network_metrics,
 };
 
 /// `statvfs` 探测函数的签名。生产环境指向真正的 libc 系统调用,
@@ -115,20 +115,24 @@ impl HostCollector {
         let network_totals =
             parse_network_totals(&fs::read_to_string(&dev_path).context("read /proc/net/dev")?)?;
         let observed_at = Instant::now();
-        let (rx_bytes_per_sec, tx_bytes_per_sec) = if let Some(previous) = self.previous_network {
-            compute_network_rates(previous, observed_at, network_totals)
+        let network_metrics = if let Some(previous) = self.previous_network {
+            compute_network_metrics(previous, observed_at, network_totals)
         } else {
-            (None, None)
+            Default::default()
         };
         self.previous_network = Some(NetworkSample {
             observed_at,
             rx_bytes: network_totals.rx_bytes,
             tx_bytes: network_totals.tx_bytes,
+            rx_packets: network_totals.rx_packets,
+            tx_packets: network_totals.tx_packets,
+            rx_dropped_packets: network_totals.rx_dropped_packets,
+            tx_dropped_packets: network_totals.tx_dropped_packets,
         });
-        super::log_network_rate_anomalies(
-            self.network_rate_baselines
-                .observe(rx_bytes_per_sec, tx_bytes_per_sec),
-        );
+        super::log_network_rate_anomalies(self.network_rate_baselines.observe(
+            network_metrics.rx_bytes_per_sec,
+            network_metrics.tx_bytes_per_sec,
+        ));
 
         let loadavg_path = self.sys_root.join("proc/loadavg");
         let load =
@@ -151,8 +155,9 @@ impl HostCollector {
             network: NetworkCounters {
                 total_rx_bytes: network_totals.rx_bytes,
                 total_tx_bytes: network_totals.tx_bytes,
-                rx_bytes_per_sec,
-                tx_bytes_per_sec,
+                rx_bytes_per_sec: network_metrics.rx_bytes_per_sec,
+                tx_bytes_per_sec: network_metrics.tx_bytes_per_sec,
+                packet_loss_percent: network_metrics.packet_loss_percent,
             },
         })
     }
@@ -342,11 +347,15 @@ fn parse_memory_usage(content: &str) -> Result<MemoryUsage> {
     })
 }
 
-/// 汇总 `/proc/net/dev` 中所有物理网卡的累计收发字节数。
+/// 汇总 `/proc/net/dev` 中所有物理网卡的累计收发字节、包数与丢包数。
 /// 跳过 `lo`(回环口),避免本机通信被统计为外部流量。
 fn parse_network_totals(content: &str) -> Result<NetworkTotals> {
     let mut rx_bytes = 0_u64;
     let mut tx_bytes = 0_u64;
+    let mut rx_packets = 0_u64;
+    let mut tx_packets = 0_u64;
+    let mut rx_dropped_packets = 0_u64;
+    let mut tx_dropped_packets = 0_u64;
 
     for line in content.lines().skip(2) {
         let Some((iface, counters)) = line.split_once(':') else {
@@ -355,27 +364,35 @@ fn parse_network_totals(content: &str) -> Result<NetworkTotals> {
         if iface.trim() == "lo" {
             continue;
         }
-        let (iface_rx_bytes, iface_tx_bytes) = parse_network_line_counters(counters, iface.trim())?;
-        rx_bytes = rx_bytes.saturating_add(iface_rx_bytes);
-        tx_bytes = tx_bytes.saturating_add(iface_tx_bytes);
+        let iface_totals = parse_network_line_counters(counters, iface.trim())?;
+        rx_bytes = rx_bytes.saturating_add(iface_totals.rx_bytes);
+        tx_bytes = tx_bytes.saturating_add(iface_totals.tx_bytes);
+        rx_packets = rx_packets.saturating_add(iface_totals.rx_packets);
+        tx_packets = tx_packets.saturating_add(iface_totals.tx_packets);
+        rx_dropped_packets = rx_dropped_packets.saturating_add(iface_totals.rx_dropped_packets);
+        tx_dropped_packets = tx_dropped_packets.saturating_add(iface_totals.tx_dropped_packets);
     }
 
-    Ok(NetworkTotals { rx_bytes, tx_bytes })
+    Ok(NetworkTotals {
+        rx_bytes,
+        tx_bytes,
+        rx_packets,
+        tx_packets,
+        rx_dropped_packets,
+        tx_dropped_packets,
+    })
 }
 
-fn parse_network_line_counters(counters: &str, iface: &str) -> Result<(u64, u64)> {
-    let mut rx_bytes = None;
-    let mut tx_bytes = None;
+fn parse_network_line_counters(counters: &str, iface: &str) -> Result<NetworkTotals> {
+    let mut values = [0_u64; 16];
     let mut counter_count = 0_usize;
 
     for (index, raw_value) in counters.split_whitespace().enumerate() {
         let value = raw_value
             .parse::<u64>()
             .context("invalid network counter")?;
-        if index == 0 {
-            rx_bytes = Some(value);
-        } else if index == 8 {
-            tx_bytes = Some(value);
+        if index < values.len() {
+            values[index] = value;
         }
         counter_count += 1;
     }
@@ -386,7 +403,14 @@ fn parse_network_line_counters(counters: &str, iface: &str) -> Result<(u64, u64)
         ));
     }
 
-    Ok((rx_bytes.unwrap_or(0), tx_bytes.unwrap_or(0)))
+    Ok(NetworkTotals {
+        rx_bytes: values[0],
+        tx_bytes: values[8],
+        rx_packets: values[1],
+        tx_packets: values[9],
+        rx_dropped_packets: values[3],
+        tx_dropped_packets: values[11],
+    })
 }
 
 /// 遍历 `/proc/mounts` 并通过 `statvfs` 获取各挂载点的容量信息。
@@ -527,8 +551,8 @@ mod tests {
     use anyhow::Result;
 
     use super::{
-        FilesystemStats, HostCollector, compute_cpu_usage, compute_network_rates, parse_cpu_sample,
-        parse_load_average, parse_memory_usage, parse_network_totals,
+        FilesystemStats, HostCollector, compute_cpu_usage, compute_network_metrics,
+        parse_cpu_sample, parse_load_average, parse_memory_usage, parse_network_totals,
     };
 
     /// RAII 临时目录:构造时创建唯一目录,析构时递归删除。
@@ -600,20 +624,39 @@ mod tests {
     #[test]
     fn parses_network_totals_and_rates() {
         let totals = parse_network_totals(
-            "Inter-|   Receive                                                |  Transmit\n face |bytes packets errs drop fifo frame compressed multicast|bytes packets errs drop fifo colls carrier compressed\n eth0: 200 0 0 0 0 0 0 0 100 0 0 0 0 0 0 0\n lo: 50 0 0 0 0 0 0 0 50 0 0 0 0 0 0 0\n",
+            "Inter-|   Receive                                                |  Transmit\n face |bytes packets errs drop fifo frame compressed multicast|bytes packets errs drop fifo colls carrier compressed\n eth0: 200 20 0 2 0 0 0 0 100 10 0 1 0 0 0 0\n lo: 50 5 0 0 0 0 0 0 50 5 0 0 0 0 0 0\n",
         )
         .expect("parse /proc/net/dev block");
         assert_eq!(totals.rx_bytes, 200);
         assert_eq!(totals.tx_bytes, 100);
+        assert_eq!(totals.rx_packets, 20);
+        assert_eq!(totals.tx_packets, 10);
+        assert_eq!(totals.rx_dropped_packets, 2);
+        assert_eq!(totals.tx_dropped_packets, 1);
 
         let previous = super::NetworkSample {
             observed_at: Instant::now() - Duration::from_secs(2),
             rx_bytes: 100,
             tx_bytes: 40,
+            rx_packets: 10,
+            tx_packets: 4,
+            rx_dropped_packets: 0,
+            tx_dropped_packets: 0,
         };
-        let (rx_rate, tx_rate) = compute_network_rates(previous, Instant::now(), totals);
-        assert!(rx_rate.expect("rx rate present after two samples") > 40.0);
-        assert!(tx_rate.expect("tx rate present after two samples") > 20.0);
+        let metrics = compute_network_metrics(previous, Instant::now(), totals);
+        assert!(
+            metrics
+                .rx_bytes_per_sec
+                .expect("rx rate present after two samples")
+                > 40.0
+        );
+        assert!(
+            metrics
+                .tx_bytes_per_sec
+                .expect("tx rate present after two samples")
+                > 20.0
+        );
+        assert!(metrics.packet_loss_percent.is_some());
     }
 
     #[test]
@@ -648,7 +691,7 @@ mod tests {
         .expect("write mock proc/stat");
         std::fs::write(
             root.join("proc/net/dev"),
-            "Inter-|   Receive                                                |  Transmit\n face |bytes packets errs drop fifo frame compressed multicast|bytes packets errs drop fifo colls carrier compressed\n eth0: 200 0 0 0 0 0 0 0 100 0 0 0 0 0 0 0\n",
+            "Inter-|   Receive                                                |  Transmit\n face |bytes packets errs drop fifo frame compressed multicast|bytes packets errs drop fifo colls carrier compressed\n eth0: 200 20 0 2 0 0 0 0 100 10 0 1 0 0 0 0\n",
         )
         .expect("write mock proc/net/dev");
         std::fs::write(root.join("proc/loadavg"), "0.15 0.30 0.45 1/100 12345\n")
@@ -712,6 +755,7 @@ mod tests {
         assert_eq!(snapshot1.network.total_tx_bytes, 100);
         assert_eq!(snapshot1.network.rx_bytes_per_sec, None);
         assert_eq!(snapshot1.network.tx_bytes_per_sec, None);
+        assert_eq!(snapshot1.network.packet_loss_percent, None);
 
         // Disk usage comes entirely from the injected statvfs stub: the ext4 root is
         // reported, tmpfs is ignored, and the host's real `/` is never queried.

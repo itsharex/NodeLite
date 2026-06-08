@@ -153,6 +153,7 @@ mod tests {
                 total_tx_bytes,
                 rx_bytes_per_sec,
                 tx_bytes_per_sec,
+                packet_loss_percent: None,
             },
         }
     }

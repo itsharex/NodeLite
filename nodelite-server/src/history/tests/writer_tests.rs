@@ -78,6 +78,7 @@ async fn record_status_does_not_throttle_after_queue_full_drop() {
             rx_bytes_per_sec: Some(3.0),
             tx_bytes_per_sec: Some(4.0),
             latency_ms: Some(5),
+            packet_loss_percent: Some(0.5),
             disk_used_percent: Some(6.0),
         })
         .expect("test channel should accept prefilled point");

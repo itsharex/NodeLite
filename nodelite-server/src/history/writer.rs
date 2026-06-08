@@ -158,8 +158,9 @@ fn write_history_batch(
                     rx_bytes_per_sec,
                     tx_bytes_per_sec,
                     latency_ms,
+                    packet_loss_percent,
                     disk_used_percent
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
                 "#,
             )?;
             for point in points {
@@ -174,6 +175,7 @@ fn write_history_batch(
                     point.rx_bytes_per_sec,
                     point.tx_bytes_per_sec,
                     point.latency_ms,
+                    point.packet_loss_percent,
                     point.disk_used_percent,
                 ])?;
             }
@@ -240,6 +242,7 @@ pub(super) fn build_history_point(status: &NodeStatus) -> Option<HistoryPoint> {
         rx_bytes_per_sec: snapshot.network.rx_bytes_per_sec,
         tx_bytes_per_sec: snapshot.network.tx_bytes_per_sec,
         latency_ms: status.latency_ms,
+        packet_loss_percent: snapshot.network.packet_loss_percent,
         disk_used_percent,
     })
 }

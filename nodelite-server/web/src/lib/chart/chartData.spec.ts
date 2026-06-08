@@ -23,6 +23,7 @@ function hp(recorded_at: string, over: Partial<HistoryPoint> = {}): HistoryPoint
     rx_bytes_per_sec: null,
     tx_bytes_per_sec: null,
     latency_ms: null,
+    packet_loss_percent: null,
     disk_used_percent: null,
     ...over,
   };
@@ -148,7 +149,7 @@ describe('chartPoints / averageValue / buildChartData', () => {
     expect(averageValue([{ ts: 1, value: null }])).toBe(0);
   });
 
-  it('builds all five metric series', () => {
+  it('builds all metric series', () => {
     const data = buildChartData([
       hp('2026-05-29T00:00:00Z', {
         cpu_usage_percent: 1,
@@ -159,6 +160,7 @@ describe('chartPoints / averageValue / buildChartData', () => {
         rx_bytes_per_sec: 3,
         tx_bytes_per_sec: 4,
         latency_ms: 5,
+        packet_loss_percent: 0.5,
         disk_used_percent: 6,
       }),
     ]);
@@ -170,6 +172,7 @@ describe('chartPoints / averageValue / buildChartData', () => {
     expect(data.dlPts[0]!.value).toBe(3);
     expect(data.upPts[0]!.value).toBe(4);
     expect(data.rttPts[0]!.value).toBe(5);
+    expect(data.packetLossPts[0]!.value).toBe(0.5);
     expect(data.diskPts[0]!.value).toBe(6);
   });
 });

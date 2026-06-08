@@ -647,6 +647,18 @@ fn render_network_metrics(emitter: &mut MetricEmitter, node_id: &str, snapshot: 
             );
         }
     }
+    if let Some(packet_loss_percent) = snapshot
+        .network
+        .packet_loss_percent
+        .filter(|value| value.is_finite())
+    {
+        emitter.gauge(
+            "nodelite_node_network_packet_loss_ratio",
+            "Latest aggregate network packet loss ratio reported by the node in the range 0..1.",
+            &[("node_id", node_id)],
+            packet_loss_percent / 100.0,
+        );
+    }
 }
 
 fn render_disk_metrics(emitter: &mut MetricEmitter, node_id: &str, snapshot: &NodeSnapshot) {

@@ -86,6 +86,8 @@ pub struct NetworkCounters {
     pub total_tx_bytes: u64,
     pub rx_bytes_per_sec: Option<f64>,
     pub tx_bytes_per_sec: Option<f64>,
+    #[serde(default)]
+    pub packet_loss_percent: Option<f64>,
 }
 
 /// Server 端推断出的 IP 地理位置。手动 tag 仍然可以在 UI 中覆盖/回退。
@@ -181,6 +183,8 @@ pub struct HistoryPoint {
     pub rx_bytes_per_sec: Option<f64>,
     pub tx_bytes_per_sec: Option<f64>,
     pub latency_ms: Option<u64>,
+    #[serde(default)]
+    pub packet_loss_percent: Option<f64>,
     pub disk_used_percent: Option<f64>,
 }
 

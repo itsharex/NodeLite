@@ -38,6 +38,7 @@ pub(super) fn initialize_database(
             rx_bytes_per_sec REAL,
             tx_bytes_per_sec REAL,
             latency_ms INTEGER,
+            packet_loss_percent REAL,
             disk_used_percent REAL
         );
         "#,
@@ -81,6 +82,7 @@ fn migrate_nullable_cpu_usage(connection: &Connection) -> Result<()> {
             rx_bytes_per_sec REAL,
             tx_bytes_per_sec REAL,
             latency_ms INTEGER,
+            packet_loss_percent REAL,
             disk_used_percent REAL
         );
         INSERT INTO history_points (
@@ -94,6 +96,7 @@ fn migrate_nullable_cpu_usage(connection: &Connection) -> Result<()> {
             rx_bytes_per_sec,
             tx_bytes_per_sec,
             latency_ms,
+            packet_loss_percent,
             disk_used_percent
         )
         SELECT
@@ -107,6 +110,7 @@ fn migrate_nullable_cpu_usage(connection: &Connection) -> Result<()> {
             rx_bytes_per_sec,
             tx_bytes_per_sec,
             latency_ms,
+            NULL,
             disk_used_percent
         FROM history_points_legacy_not_null_cpu;
         DROP TABLE history_points_legacy_not_null_cpu;
@@ -133,6 +137,10 @@ fn migrate_history_metric_columns(connection: &Connection) -> Result<()> {
             "load_fifteen",
             "ALTER TABLE history_points ADD COLUMN load_fifteen REAL",
         ),
+        (
+            "packet_loss_percent",
+            "ALTER TABLE history_points ADD COLUMN packet_loss_percent REAL",
+        ),
     ] {
         if !existing_columns.iter().any(|existing| existing == column) {
             connection.execute(sql, [])?;
@@ -158,6 +166,7 @@ fn ensure_history_indexes(connection: &Connection) -> Result<()> {
         "rx_bytes_per_sec",
         "tx_bytes_per_sec",
         "latency_ms",
+        "packet_loss_percent",
         "disk_used_percent",
     ];
     let existing_covering_columns = covering_index_columns(connection)?;
@@ -188,6 +197,7 @@ fn ensure_history_indexes(connection: &Connection) -> Result<()> {
                 rx_bytes_per_sec,
                 tx_bytes_per_sec,
                 latency_ms,
+                packet_loss_percent,
                 disk_used_percent
             );
         "#,

@@ -720,6 +720,7 @@ pub(crate) fn fake_snapshot_at(uptime_secs: u64, collected_at: DateTime<Utc>) ->
             total_tx_bytes: 256 * 1024 * uptime_secs,
             rx_bytes_per_sec: Some(32_768.0 + uptime_secs as f64),
             tx_bytes_per_sec: Some(16_384.0 + uptime_secs as f64),
+            packet_loss_percent: Some((uptime_secs % 3) as f64 * 0.1),
         },
     }
 }

@@ -253,6 +253,8 @@ fn sanitize_network_counters(
         MAX_SANITIZED_RATE_BYTES_PER_SEC,
         &mut report.sanitized_rates,
     );
+    network.packet_loss_percent =
+        sanitize_optional_percentage(network.packet_loss_percent, &mut report.clamped_percents);
     network
 }
 

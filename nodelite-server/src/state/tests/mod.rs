@@ -114,6 +114,7 @@ fn sample_snapshot(now: chrono::DateTime<Utc>) -> NodeSnapshot {
             total_tx_bytes: 200,
             rx_bytes_per_sec: Some(5.0),
             tx_bytes_per_sec: Some(7.0),
+            packet_loss_percent: Some(0.5),
         },
     }
 }

@@ -23,6 +23,7 @@ pub(crate) const HISTORY_QUERY_SQL: &str = r#"
             AVG(rx_bytes_per_sec) AS rx_bytes_per_sec,
             AVG(tx_bytes_per_sec) AS tx_bytes_per_sec,
             AVG(latency_ms) AS latency_ms,
+            AVG(packet_loss_percent) AS packet_loss_percent,
             AVG(disk_used_percent) AS disk_used_percent
         FROM history_points INDEXED BY idx_history_points_covering_metrics
         WHERE node_id = ?1 AND recorded_at >= ?2 AND recorded_at <= ?3
@@ -78,7 +79,8 @@ pub(super) fn query_history_between(
                 latency_ms: row
                     .get::<_, Option<f64>>(9)?
                     .map(|value| value.max(0.0).round() as u64),
-                disk_used_percent: row.get(10)?,
+                packet_loss_percent: row.get(10)?,
+                disk_used_percent: row.get(11)?,
             })
         },
     )?;

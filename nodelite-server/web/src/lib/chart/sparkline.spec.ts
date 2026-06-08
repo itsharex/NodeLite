@@ -20,6 +20,7 @@ function point(recorded_at: string, cpu: number | null): HistoryPoint {
     rx_bytes_per_sec: null,
     tx_bytes_per_sec: null,
     latency_ms: null,
+    packet_loss_percent: null,
     disk_used_percent: null,
   };
 }

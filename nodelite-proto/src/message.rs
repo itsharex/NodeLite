@@ -231,6 +231,7 @@ mod tests {
         };
         assert_eq!(legacy.snapshot.cpu_usage_percent, Some(42.5));
         assert_eq!(null.snapshot.cpu_usage_percent, None);
+        assert_eq!(legacy.snapshot.network.packet_loss_percent, None);
     }
 
     /// 验证所有 WireMessage 子类型都能完整序列化和反序列化。
@@ -276,6 +277,7 @@ mod tests {
                     total_tx_bytes: 200,
                     rx_bytes_per_sec: Some(10.0),
                     tx_bytes_per_sec: Some(20.0),
+                    packet_loss_percent: Some(0.5),
                 },
             },
         });

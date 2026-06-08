@@ -76,6 +76,7 @@ fn exporter_exposes_snapshot_resource_metrics_for_each_node() {
             "nodelite_node_network_bytes_total{node_id=\"node-1\",direction=\"rx\"} 1500"
         )
     );
+    assert!(body.contains("nodelite_node_network_packet_loss_ratio{node_id=\"node-1\"} 0.005"));
 }
 
 #[test]
@@ -104,6 +105,7 @@ fn exporter_omits_snapshot_resource_metrics_by_default() {
         "nodelite_node_load_average{",
         "nodelite_node_network_bytes_total{",
         "nodelite_node_network_rate_bytes_per_second{",
+        "nodelite_node_network_packet_loss_ratio{",
         "nodelite_node_disk_bytes{",
     ] {
         assert!(!body.contains(metric), "default /metrics exported {metric}");
@@ -406,6 +408,7 @@ fn sample_status(node_id: &str, node_label: &str, uptime_secs: u64, load_15m: f6
                 total_tx_bytes: 900,
                 rx_bytes_per_sec: Some(128.0),
                 tx_bytes_per_sec: Some(64.0),
+                packet_loss_percent: Some(0.5),
             },
         }),
         last_seen: Some(Utc::now()),
