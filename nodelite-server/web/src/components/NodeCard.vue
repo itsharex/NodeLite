@@ -76,7 +76,9 @@ const memory = computed(() => {
 });
 
 const sparkColor = computed(() => sparklineColor(status.value));
-const sparkPoints = computed(() => nodeSparkPoints(historyStore.points(nodeId.value), cpu.value));
+const sparkPoints = computed(() =>
+  nodeSparkPoints(historyStore.points(nodeId.value), props.node.snapshot?.load.one),
+);
 const spark = computed(() => buildSparkline(sparkPoints.value));
 
 function clampPercent(value: number | null): number {
@@ -180,7 +182,7 @@ watch(
           y2="48"
           :stroke="sparkColor"
           stroke-width="1"
-          stroke-opacity="0.28"
+          stroke-opacity="0.52"
         />
       </svg>
     </div>

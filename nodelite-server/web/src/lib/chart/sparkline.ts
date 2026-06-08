@@ -86,16 +86,16 @@ export function buildSparkline(points: number[]): Sparkline | null {
 }
 
 /**
- * CPU history for the spark, falling back to the node's current snapshot
+ * Load-average history for the spark, falling back to the node's current snapshot
  * value when no history is cached yet.
  */
 export function nodeSparkPoints(
   history: HistoryPoint[] | undefined,
-  currentCpu: number | null | undefined,
+  currentLoad: number | null | undefined,
 ): number[] {
-  const points = aggregateSeries(history, 'cpu_usage_percent');
+  const points = aggregateSeries(history, 'load_one');
   if (points.length > 0) return points;
-  if (currentCpu == null) return [];
-  const current = Number(currentCpu);
+  if (currentLoad == null) return [];
+  const current = Number(currentLoad);
   return Number.isFinite(current) ? [current] : [];
 }
