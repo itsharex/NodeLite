@@ -155,7 +155,7 @@ const expression = computed(() => {
 .rule-card {
   background: var(--bg-card-soft);
   border: 1px solid var(--border-soft);
-  border-radius: 12px;
+  border-radius: 8px;
   padding: 14px 16px;
 }
 .rule-head {
@@ -213,7 +213,7 @@ const expression = computed(() => {
   color: var(--text-primary);
   border: 1px solid var(--border-soft);
   border-radius: 8px;
-  padding: 8px 10px;
+  padding: 9px 10px;
   font: inherit;
 }
 .toggle {

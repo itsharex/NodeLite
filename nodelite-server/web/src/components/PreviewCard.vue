@@ -86,8 +86,8 @@ const highlights = computed(() => props.preview?.inspection.highlights ?? []);
 .panel {
   background: var(--bg-card);
   border: 1px solid var(--border-soft);
-  border-radius: 16px;
-  padding: 18px 20px;
+  border-radius: 8px;
+  padding: 16px;
 }
 .card-head {
   display: flex;
@@ -112,7 +112,7 @@ const highlights = computed(() => props.preview?.inspection.highlights ?? []);
   padding: 10px 12px;
   background: var(--bg-card-soft);
   border: 1px solid var(--border-soft);
-  border-radius: 10px;
+  border-radius: 8px;
 }
 .summary-value {
   font-size: 18px;

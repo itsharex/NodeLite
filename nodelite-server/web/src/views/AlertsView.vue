@@ -62,7 +62,16 @@ async function save(): Promise<void> {
 
     <section class="alerts" data-test="alerts-view">
       <template v-if="store.config">
-        <AlertOverviewCard v-model="draft" />
+        <AlertOverviewCard
+          :model-value="draft"
+          @update:model-value="(next) => Object.assign(draft, next)"
+        />
+
+        <div class="alerts__grid" :class="{ 'alerts__grid--disabled': !draft.enabled }">
+          <SmtpChannelCard v-model="draft.smtp" />
+          <WebhookChannelCard v-model="draft.webhook" />
+          <InspectionCard v-model="draft.inspection" />
+        </div>
 
         <article class="save-bar panel" data-test="alerts-save-bar">
           <ReauthFields
@@ -83,12 +92,6 @@ async function save(): Promise<void> {
             <SettingsMessage :state="message.state" :text="message.text" />
           </div>
         </article>
-
-        <div class="alerts__grid" :class="{ 'alerts__grid--disabled': !draft.enabled }">
-          <SmtpChannelCard v-model="draft.smtp" />
-          <WebhookChannelCard v-model="draft.webhook" />
-          <InspectionCard v-model="draft.inspection" />
-        </div>
 
         <RuleList v-model="draft.rules" />
         <PreviewCard :preview="store.preview" />
@@ -125,12 +128,12 @@ async function save(): Promise<void> {
 .panel {
   background: var(--bg-card);
   border: 1px solid var(--border-soft);
-  border-radius: 16px;
-  padding: 18px 20px;
+  border-radius: 8px;
+  padding: 16px;
 }
 .save-bar {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, auto);
   gap: 16px;
   align-items: end;
 }
@@ -150,7 +153,7 @@ async function save(): Promise<void> {
   background: var(--bg-card-soft);
   color: var(--text-secondary);
   border: 1px solid var(--border-soft);
-  border-radius: 10px;
+  border-radius: 8px;
   padding: 8px 14px;
   font: inherit;
 }
@@ -167,7 +170,7 @@ async function save(): Promise<void> {
   margin: 0;
   font-size: 24px;
   font-weight: 600;
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
 }
 .page-subtitle {
   margin: 4px 0 0;

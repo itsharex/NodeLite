@@ -60,8 +60,8 @@ const summary = computed(() => webhook.value.url || t('settings.disabled'));
 .panel {
   background: var(--bg-card);
   border: 1px solid var(--border-soft);
-  border-radius: 16px;
-  padding: 18px 20px;
+  border-radius: 8px;
+  padding: 16px;
 }
 .card-head {
   display: flex;
@@ -72,14 +72,14 @@ const summary = computed(() => webhook.value.url || t('settings.disabled'));
 }
 .card-title {
   margin: 0;
-  font-size: 14px;
+  font-size: 16px;
   font-weight: 600;
 }
 .collapsed-note {
   margin: 0;
   background: var(--bg-card-soft);
   border: 1px dashed var(--border-soft);
-  border-radius: 10px;
+  border-radius: 8px;
   color: var(--text-muted);
   font-size: 13px;
   padding: 12px;
@@ -102,7 +102,7 @@ const summary = computed(() => webhook.value.url || t('settings.disabled'));
   color: var(--text-primary);
   border: 1px solid var(--border-soft);
   border-radius: 8px;
-  padding: 8px 10px;
+  padding: 9px 10px;
   font: inherit;
 }
 .field input:disabled {

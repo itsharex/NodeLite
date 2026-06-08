@@ -59,8 +59,8 @@ function update(index: number, next: RuleDraft): void {
 .panel {
   background: var(--bg-card);
   border: 1px solid var(--border-soft);
-  border-radius: 16px;
-  padding: 18px 20px;
+  border-radius: 8px;
+  padding: 16px;
 }
 .rules-head {
   display: flex;
@@ -97,7 +97,7 @@ function update(index: number, next: RuleDraft): void {
   background: var(--bg-card-soft);
   color: var(--text-secondary);
   border: 1px solid var(--border-soft);
-  border-radius: 10px;
+  border-radius: 8px;
   padding: 8px 14px;
   font: inherit;
 }

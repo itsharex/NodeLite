@@ -37,63 +37,73 @@ const tiles = computed(() => [
   { label: t('alerts.summary.rules'), value: ruleSummary.value },
   { label: t('alerts.summary.inspection'), value: inspectionSummary.value },
 ]);
+
+function setEnabled(event: Event): void {
+  draft.value.enabled = (event.target as HTMLInputElement).checked;
+}
 </script>
 
 <template>
   <article class="panel" data-test="alert-overview-card">
-    <header class="card-head">
+    <div class="overview-intro">
       <h2 class="card-title">{{ t('alerts.overview.title') }}</h2>
-      <label class="toggle">
-        <input v-model="draft.enabled" type="checkbox" data-test="alerts-enabled" />
-        <span>{{ t('alerts.overview.enabled') }}</span>
-      </label>
-    </header>
-    <p class="note">{{ t('alerts.overview.note') }}</p>
+      <p class="note">{{ t('alerts.overview.note') }}</p>
+    </div>
     <div class="tiles">
       <div v-for="tile in tiles" :key="tile.label" class="tile">
         <span class="tile__label">{{ tile.label }}</span>
         <strong class="tile__value">{{ tile.value }}</strong>
       </div>
     </div>
+    <label class="toggle">
+      <input
+        type="checkbox"
+        :checked="draft.enabled"
+        data-test="alerts-enabled"
+        @change="setEnabled"
+      />
+      <span>{{ t('alerts.overview.enabled') }}</span>
+    </label>
   </article>
 </template>
 
 <style scoped>
 .panel {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.2fr) minmax(0, 2fr) minmax(180px, auto);
+  gap: 18px;
+  align-items: center;
   background: var(--bg-card);
   border: 1px solid var(--border-soft);
-  border-radius: 16px;
-  padding: 18px 20px;
-}
-.card-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 8px;
+  border-radius: 8px;
+  padding: 16px;
 }
 .card-title {
   margin: 0;
-  font-size: 14px;
+  font-size: 16px;
   font-weight: 600;
 }
 .note {
   color: var(--text-muted);
   font-size: 12px;
-  margin: 0 0 14px;
+  line-height: 1.5;
+  margin: 6px 0 0;
 }
 .tiles {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border-left: 1px solid var(--border-soft);
+  border-right: 1px solid var(--border-soft);
 }
 .tile {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  background: var(--bg-card-soft);
-  border-radius: 10px;
-  padding: 10px 12px;
+  padding: 4px 18px;
+  border-right: 1px solid var(--border-soft);
+}
+.tile:last-child {
+  border-right: 0;
 }
 .tile__label {
   color: var(--text-muted);
@@ -110,5 +120,35 @@ const tiles = computed(() => [
   gap: 6px;
   font-size: 13px;
   color: var(--text-secondary);
+  justify-self: end;
+  white-space: nowrap;
+}
+@media (max-width: 980px) {
+  .panel {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .tiles {
+    border: 1px solid var(--border-soft);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .tile {
+    padding: 12px;
+  }
+  .toggle {
+    justify-self: start;
+  }
+}
+@media (max-width: 620px) {
+  .tiles {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .tile {
+    border-right: 0;
+    border-bottom: 1px solid var(--border-soft);
+  }
+  .tile:last-child {
+    border-bottom: 0;
+  }
 }
 </style>
