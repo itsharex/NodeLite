@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
+import { useI18n } from 'vue-i18n';
+import type { NodeListItem } from '@/api';
 import { useNodesStore } from '@/stores/nodes';
 import { useWorldGeoJson } from '@/composables/useWorldGeoJson';
 import { useTheme } from '@/composables/useTheme';
@@ -9,21 +11,54 @@ import { drawFallbackMask, drawGeoJsonMask, paintWorldDotMap } from '@/lib/map/l
 const nodesStore = useNodesStore();
 const { geojson, load } = useWorldGeoJson();
 const { theme } = useTheme();
+const { t } = useI18n();
 
 const canvas = ref<HTMLCanvasElement | null>(null);
+const activeDotId = ref<string | null>(null);
 
 const dots = computed(() =>
   nodesStore.nodes.map((node) => {
     const pos = nodePosition(node);
+    const x = pos.x * 100;
+    const y = pos.y * 100;
     return {
       id: node.identity.node_id,
-      label: node.identity.node_label,
+      label: node.identity.node_label || node.identity.node_id,
       status: nodeStatusKey(node),
-      left: `${(pos.x * 100).toFixed(2)}%`,
-      top: `${(pos.y * 100).toFixed(2)}%`,
+      statusLabelKey: statusLabelKey(node),
+      location: locationText(node),
+      load: node.snapshot?.load.one == null ? '—' : node.snapshot.load.one.toFixed(2),
+      latency: node.latency_ms == null ? '—' : `${Math.round(node.latency_ms)} ms`,
+      left: `${x.toFixed(2)}%`,
+      top: `${y.toFixed(2)}%`,
+      edgeX: x > 72 ? 'right' : x < 28 ? 'left' : 'center',
+      edgeY: y < 28 ? 'bottom' : 'top',
     };
   }),
 );
+
+const activeDot = computed(() => dots.value.find((dot) => dot.id === activeDotId.value) ?? null);
+
+function statusLabelKey(node: NodeListItem): string {
+  switch (nodeStatusKey(node)) {
+    case 'offline':
+      return 'common.offline';
+    case 'latency':
+      return 'common.latency_warn';
+    default:
+      return 'common.online';
+  }
+}
+
+function locationText(node: NodeListItem): string {
+  for (const tag of node.identity.tags || []) {
+    const match = String(tag).match(/^(?:loc|location|region|city)[:=](.+)$/i);
+    if (match?.[1]) return match[1];
+  }
+  if (node.geoip_country === 'LAN') return 'LAN';
+  const geo = [node.geoip_city, node.geoip_country].filter(Boolean);
+  return geo.length > 0 ? geo.join(', ') : node.identity.hostname;
+}
 
 function dotColor(): string {
   const el = canvas.value ?? document.documentElement;
@@ -80,8 +115,41 @@ watch([geojson, theme], repaint);
           :class="dot.status"
           :style="{ left: dot.left, top: dot.top }"
           :title="dot.label"
+          tabindex="0"
           data-test="map-dot"
+          @pointerenter="activeDotId = dot.id"
+          @pointerleave="activeDotId = null"
+          @focus="activeDotId = dot.id"
+          @blur="activeDotId = null"
         />
+      </div>
+      <div
+        v-if="activeDot"
+        class="map-hover-card"
+        :class="[
+          `map-hover-card--x-${activeDot.edgeX}`,
+          `map-hover-card--y-${activeDot.edgeY}`,
+        ]"
+        :style="{ left: activeDot.left, top: activeDot.top }"
+        data-test="map-hover-card"
+      >
+        <div class="map-hover-card__head">
+          <span class="map-hover-card__title">{{ activeDot.label }}</span>
+          <span class="map-hover-card__status" :class="activeDot.status">
+            {{ t(activeDot.statusLabelKey) }}
+          </span>
+        </div>
+        <div class="map-hover-card__location">{{ activeDot.location }}</div>
+        <div class="map-hover-card__metrics">
+          <span>
+            <small>{{ t('index.node.load') }}</small>
+            <strong>{{ activeDot.load }}</strong>
+          </span>
+          <span>
+            <small>{{ t('index.node.latency') }}</small>
+            <strong>{{ activeDot.latency }}</strong>
+          </span>
+        </div>
       </div>
     </div>
   </article>
@@ -175,9 +243,14 @@ watch([geojson, theme], repaint);
   height: 9px;
   border-radius: 50%;
   transform: translate(-50%, -50%);
+  outline: none;
   box-shadow:
     0 0 0 3px var(--map-dot-ring),
     0 0 18px currentColor;
+}
+.map-dot:hover,
+.map-dot:focus-visible {
+  z-index: 3;
 }
 .map-dot::after {
   content: '';
@@ -199,6 +272,90 @@ watch([geojson, theme], repaint);
 .map-dot.offline {
   color: var(--accent-red);
   background: var(--accent-red);
+}
+.map-hover-card {
+  position: absolute;
+  z-index: 4;
+  width: min(240px, calc(100% - 24px));
+  padding: 12px 13px;
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--bg-card) 94%, transparent);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.28);
+  pointer-events: none;
+}
+.map-hover-card--x-center.map-hover-card--y-top {
+  transform: translate(-50%, calc(-100% - 16px));
+}
+.map-hover-card--x-left.map-hover-card--y-top {
+  transform: translate(-12px, calc(-100% - 16px));
+}
+.map-hover-card--x-right.map-hover-card--y-top {
+  transform: translate(calc(-100% + 12px), calc(-100% - 16px));
+}
+.map-hover-card--x-center.map-hover-card--y-bottom {
+  transform: translate(-50%, 16px);
+}
+.map-hover-card--x-left.map-hover-card--y-bottom {
+  transform: translate(-12px, 16px);
+}
+.map-hover-card--x-right.map-hover-card--y-bottom {
+  transform: translate(calc(-100% + 12px), 16px);
+}
+.map-hover-card__head,
+.map-hover-card__metrics {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.map-hover-card__title {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.map-hover-card__status {
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: 600;
+}
+.map-hover-card__status.online {
+  color: var(--accent-green);
+}
+.map-hover-card__status.latency {
+  color: var(--accent-yellow);
+}
+.map-hover-card__status.offline {
+  color: var(--accent-red);
+}
+.map-hover-card__location {
+  margin-top: 5px;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.map-hover-card__metrics {
+  margin-top: 12px;
+}
+.map-hover-card__metrics span {
+  display: grid;
+  gap: 3px;
+}
+.map-hover-card__metrics small {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+.map-hover-card__metrics strong {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
 }
 @keyframes dotPulse {
   0% {
