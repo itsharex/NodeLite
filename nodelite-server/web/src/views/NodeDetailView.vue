@@ -13,7 +13,7 @@ import NodeSettingsPanel from '@/components/NodeSettingsPanel.vue';
 import { usePolling } from '@/composables/usePolling';
 import { useChartSelection, type PresetKey } from '@/composables/useChartSelection';
 import { nodeStatusKey } from '@/lib/map/projection';
-import { ipFromNode, locationFromNode } from '@/lib/nodeMeta';
+import { effectiveGeoLocation, ipFromNode, locationFromNode } from '@/lib/nodeMeta';
 import { uptimeParts } from '@/lib/format';
 import { buildChartData } from '@/lib/chart/chartData';
 import { loadSeries, networkSeries } from '@/lib/chart/svgModel';
@@ -73,7 +73,9 @@ const title = computed(
 );
 const ip = computed(() => (node.value ? ipFromNode(node.value) : null));
 const location = computed(() => (node.value ? locationFromNode(node.value) : null));
-const isLan = computed(() => node.value?.geoip_country === 'LAN');
+const isLan = computed(() =>
+  node.value ? effectiveGeoLocation(node.value).country === 'LAN' : false,
+);
 const uptime = computed(() => uptimeParts(node.value?.snapshot?.uptime_secs));
 
 // Render not-found state only when the API returned 404. Other errors (500,

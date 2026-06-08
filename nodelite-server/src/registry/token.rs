@@ -67,6 +67,7 @@ pub(super) fn authorized_node_from_entry(
         generation: entry.token_generation,
         token_expires_at: entry.token_expires_at,
         registry_revision,
+        location_override: entry.location_override(),
     })
 }
 

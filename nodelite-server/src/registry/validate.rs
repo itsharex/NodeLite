@@ -6,7 +6,7 @@ use nodelite_proto::{
     validate_tag_list,
 };
 
-use crate::sanitize::validate_renewal_price;
+use crate::sanitize::{validate_location_override, validate_renewal_price};
 
 use super::{InstallSession, RegisteredNode, RegistryError, RegistryFile, RegistryResult};
 
@@ -58,7 +58,31 @@ pub(super) fn validate_registered_node(node: &RegisteredNode) -> RegistryResult<
     if let Some(price) = node.renewal_price.as_deref() {
         validate_renewal_price(price).map_err(RegistryError::validation)?;
     }
+    validate_location_override_fields(node)?;
     Ok(())
+}
+
+fn validate_location_override_fields(node: &RegisteredNode) -> RegistryResult<()> {
+    let has_location = node.location_override_country.is_some()
+        || node.location_override_city.is_some()
+        || node.location_override_latitude_microdegrees.is_some()
+        || node.location_override_longitude_microdegrees.is_some();
+    if !has_location {
+        return Ok(());
+    }
+    let Some(location) = node.location_override() else {
+        return Err(RegistryError::validation(
+            "node.location_override_country is required when location override is set",
+        ));
+    };
+    if node.location_override_latitude_microdegrees.is_some()
+        != node.location_override_longitude_microdegrees.is_some()
+    {
+        return Err(RegistryError::validation(
+            "node location override latitude and longitude must be set together",
+        ));
+    }
+    validate_location_override(&location).map_err(RegistryError::validation)
 }
 
 fn validate_install_session(session: &InstallSession) -> RegistryResult<()> {

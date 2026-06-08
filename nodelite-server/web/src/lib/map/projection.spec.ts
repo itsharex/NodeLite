@@ -83,6 +83,43 @@ describe('nodeRegionKey', () => {
     expect(nodeRegionKey(node)).toBe('de');
   });
 
+  it('keeps manual country ahead of explicit tags', () => {
+    const node = makeNode({
+      identity: { node_id: 'x', node_label: 'X', hostname: 'h', tags: ['country:de'] },
+      geoip_country: 'US',
+      location_override_country: 'JP',
+    });
+    expect(nodeRegionKey(node)).toBe('jp');
+  });
+
+  it('matches manual Chinese location names without coordinates', () => {
+    const node = makeNode({
+      identity: { node_id: 'x', node_label: 'X', hostname: 'h', tags: [] },
+      geoip_country: 'CN',
+      location_override_country: '香港',
+    });
+    expect(nodeRegionKey(node)).toBe('hk');
+  });
+
+  it('matches manual city aliases without coordinates', () => {
+    const node = makeNode({
+      identity: { node_id: 'x', node_label: 'X', hostname: 'h', tags: [] },
+      geoip_country: 'US',
+      location_override_country: 'JP',
+      location_override_city: 'Osaka',
+    });
+    expect(nodeRegionKey(node)).toBe('jp');
+  });
+
+  it('does not fall back to geoip country when a manual location is unknown', () => {
+    const node = makeNode({
+      identity: { node_id: 'x', node_label: 'X', hostname: 'h', tags: [] },
+      geoip_country: 'US',
+      location_override_country: 'Mars',
+    });
+    expect(nodeRegionKey(node)).toBeNull();
+  });
+
   it('treats LAN geoip as local instead of falling back to hostname', () => {
     const node = makeNode({
       identity: { node_id: 'x', node_label: 'X', hostname: 'web-in-1', tags: [] },
@@ -117,6 +154,36 @@ describe('nodePosition', () => {
     expect(x).toBeLessThan(0.9);
     expect(y).toBeGreaterThan(0.38);
     expect(y).toBeLessThan(0.46);
+  });
+
+  it('uses explicit coordinates before region anchors', () => {
+    const node = makeNode({
+      identity: { node_id: 'hk-01', node_label: 'HK', hostname: 'h', tags: ['country:us'] },
+      location_override_country: 'HK',
+      location_override_city: 'Hong Kong',
+      location_override_latitude: 22.3193,
+      location_override_longitude: 114.1694,
+    });
+    const projected = mapProject(114.1694, 22.3193);
+    const { x, y } = nodePosition(node);
+    expect(x).toBeCloseTo(projected.x / MAP_WIDTH, 5);
+    expect(y).toBeCloseTo(projected.y / MAP_HEIGHT, 5);
+  });
+
+  it('does not reuse geoip coordinates for a manual text-only location', () => {
+    const node = makeNode({
+      identity: { node_id: 'hk-02', node_label: 'HK', hostname: 'h', tags: [] },
+      geoip_country: 'CN',
+      geoip_city: 'Shenyang',
+      geoip_latitude: 41.8057,
+      geoip_longitude: 123.4315,
+      location_override_country: '香港',
+    });
+    const { x, y } = nodePosition(node);
+    expect(x).toBeGreaterThan(0.75);
+    expect(x).toBeLessThan(0.83);
+    expect(y).toBeGreaterThan(0.46);
+    expect(y).toBeLessThan(0.54);
   });
 
   it('keeps unknown-region nodes within the safe band', () => {

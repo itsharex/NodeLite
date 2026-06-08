@@ -3,13 +3,13 @@
  * map code in assets/index.html (mapProject / nodePosition / nodeRegionKey /
  * hashString). No DOM access — safe to unit test directly.
  *
- * Node dots are NOT placed by real geography: nodePosition picks a region
- * anchor (REGION_HINTS) by tag/hostname/id, then adds deterministic jitter so
- * multiple nodes in the same country don't fully overlap. mapProject (real
- * Mercator) is used only for drawing the land mask.
+ * Node dots prefer explicit/manual coordinates when available. Nodes without
+ * coordinates fall back to a region anchor and deterministic jitter so multiple
+ * nodes in the same country don't fully overlap.
  */
 
 import type { NodeListItem } from '@/api';
+import { effectiveGeoLocation } from '@/lib/nodeMeta';
 
 export const MAP_WIDTH = 1200;
 export const MAP_HEIGHT = 600;
@@ -95,6 +95,26 @@ export const COUNTRY_FLAGS: Record<string, string> = {
   eg: '🇪🇬',
 };
 
+const REGION_ALIASES: Record<string, string> = {
+  hongkong: 'hk',
+  hongkongchina: 'hk',
+  hksar: 'hk',
+  香港: 'hk',
+  日本: 'jp',
+  东京: 'jp',
+  東京: 'jp',
+  tokyo: 'jp',
+  大阪: 'jp',
+  osaka: 'jp',
+  中国: 'cn',
+  中國: 'cn',
+  shenyang: 'cn',
+  沈阳: 'cn',
+  瀋陽: 'cn',
+  新加坡: 'sg',
+  singapore: 'sg',
+};
+
 export function hashString(value: string): number {
   let h = 5381;
   for (let i = 0; i < value.length; i++) {
@@ -107,7 +127,23 @@ export function clamp01(v: number): number {
   return Math.min(0.98, Math.max(0.02, v));
 }
 
+function normalizeRegionHint(value: string | null | undefined): string | null {
+  const normalized = String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s._-]+/g, '');
+  if (!normalized) return null;
+  if (REGION_HINTS[normalized]) return normalized;
+  return REGION_ALIASES[normalized] ?? null;
+}
+
 export function nodeRegionKey(node: NodeListItem): string | null {
+  const geo = effectiveGeoLocation(node);
+  const locationRegion = geo.manual
+    ? normalizeRegionHint(geo.city) ?? normalizeRegionHint(geo.country)
+    : normalizeRegionHint(geo.country);
+  if (geo.manual && locationRegion) return locationRegion;
+
   const tags = node.identity.tags || [];
   for (const tag of tags) {
     const lower = String(tag).toLowerCase();
@@ -115,14 +151,21 @@ export function nodeRegionKey(node: NodeListItem): string | null {
     const m = lower.match(/^(?:flag|country|region|cc|loc)[:=](\w+)$/);
     if (m && m[1] && REGION_HINTS[m[1]]) return m[1];
   }
-  const geoipCountry = String(node.geoip_country || '').toLowerCase();
-  if (geoipCountry === 'lan') return 'lan';
-  if (geoipCountry && REGION_HINTS[geoipCountry]) return geoipCountry;
+  if (locationRegion) return locationRegion;
   return null;
 }
 
 /** Returns {x, y} as 0..1 fractions of the map stage. Deterministic per node. */
 export function nodePosition(node: NodeListItem): { x: number; y: number } {
+  const geo = effectiveGeoLocation(node);
+  if (geo.latitude != null && geo.longitude != null) {
+    const projected = mapProject(geo.longitude, geo.latitude);
+    return {
+      x: clamp01(projected.x / MAP_WIDTH),
+      y: clamp01(projected.y / MAP_HEIGHT),
+    };
+  }
+
   const region = nodeRegionKey(node);
   const seed = hashString(node.identity.node_id || node.identity.node_label || '');
   if (region) {

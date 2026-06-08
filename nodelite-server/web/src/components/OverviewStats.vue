@@ -2,6 +2,7 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue';
 import { useOverviewStore } from '@/stores/overview';
 import { useNodesStore } from '@/stores/nodes';
+import { effectiveGeoLocation } from '@/lib/nodeMeta';
 
 const store = useOverviewStore();
 const nodesStore = useNodesStore();
@@ -34,7 +35,10 @@ const regions = computed(() => {
   if (!store.data && nodesStore.nodes.length === 0) return PLACEHOLDER;
   const names = new Set(
     nodesStore.nodes
-      .map((node) => node.geoip_city || node.geoip_country)
+      .map((node) => {
+        const location = effectiveGeoLocation(node);
+        return location.city || location.country;
+      })
       .filter((name): name is string => Boolean(name)),
   );
   return String(names.size);

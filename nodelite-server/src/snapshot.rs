@@ -233,6 +233,7 @@ mod tests {
                 synthetic_identity("hk-01", "Hong Kong 01", "1.0.0", None, "edge"),
                 Some("198.51.100.24".to_string()),
                 None,
+                None,
             )
             .await;
 
@@ -342,6 +343,10 @@ mod tests {
             geoip_city: None,
             geoip_latitude: None,
             geoip_longitude: None,
+            location_override_country: None,
+            location_override_city: None,
+            location_override_latitude: None,
+            location_override_longitude: None,
             snapshot: None,
             last_seen: Some(Utc::now()),
             latency_ms: None,

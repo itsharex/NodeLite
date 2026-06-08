@@ -29,6 +29,12 @@ const serviceMessage = reactive<{ state: 'ok' | 'error' | null; text: string }>(
   text: '',
 });
 const serviceSaving = reactive({ value: false });
+const locationDraft = reactive({ country: '', city: '', latitude: '', longitude: '' });
+const locationMessage = reactive<{ state: 'ok' | 'error' | null; text: string }>({
+  state: null,
+  text: '',
+});
+const locationSaving = reactive({ value: false });
 
 const agent = computed(() =>
   settingsStore.data?.agents.find((a) => a.node_id === props.nodeId),
@@ -57,6 +63,17 @@ const expiryDate = computed(() => {
   return a?.token_expires_at ? fmtDateTime(a.token_expires_at) : null;
 });
 
+const automaticLocation = computed(() => {
+  const a = agent.value;
+  if (!a) return '—';
+  const parts = [a.geoip_city, a.geoip_country].filter(Boolean);
+  if (parts.length > 0) return parts.join(', ');
+  if (a.geoip_latitude != null && a.geoip_longitude != null) {
+    return `${a.geoip_latitude.toFixed(4)}, ${a.geoip_longitude.toFixed(4)}`;
+  }
+  return '—';
+});
+
 function dateInputValue(value: string | null | undefined): string {
   if (!value) return '';
   const ms = Date.parse(value);
@@ -74,9 +91,22 @@ watch(
     serviceDraft.serviceDate = dateInputValue(value?.service_expires_at);
     serviceDraft.serviceUnlimited = value?.service_unlimited ?? false;
     serviceDraft.renewalPrice = value?.renewal_price ?? '';
+    locationDraft.country = value?.location_override_country ?? '';
+    locationDraft.city = value?.location_override_city ?? '';
+    locationDraft.latitude =
+      value?.location_override_latitude == null ? '' : String(value.location_override_latitude);
+    locationDraft.longitude =
+      value?.location_override_longitude == null ? '' : String(value.location_override_longitude);
   },
   { immediate: true },
 );
+
+function optionalNumber(value: string | number): number | null | undefined {
+  const trimmed = String(value).trim();
+  if (!trimmed) return null;
+  const parsed = Number(trimmed);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
 
 async function saveServiceMetadata(): Promise<void> {
   serviceMessage.state = null;
@@ -106,6 +136,47 @@ async function saveServiceMetadata(): Promise<void> {
   }
 }
 
+async function saveLocationOverride(clear = false): Promise<void> {
+  locationMessage.state = null;
+  locationMessage.text = '';
+  const latitude = clear ? null : optionalNumber(locationDraft.latitude);
+  const longitude = clear ? null : optionalNumber(locationDraft.longitude);
+  if (latitude === undefined || longitude === undefined) {
+    locationMessage.state = 'error';
+    locationMessage.text = t('node.settings.location_invalid_number');
+    return;
+  }
+
+  locationSaving.value = true;
+  try {
+    const country = clear ? '' : locationDraft.country.trim();
+    const city = clear ? '' : locationDraft.city.trim();
+    const resp = await apiClient.updateNodeLocationOverride(props.nodeId, {
+      country: country || null,
+      city: city || null,
+      latitude,
+      longitude,
+    });
+    await settingsStore.refresh();
+    locationDraft.country = country;
+    locationDraft.city = city;
+    if (clear) {
+      locationDraft.latitude = '';
+      locationDraft.longitude = '';
+    }
+    locationMessage.state = 'ok';
+    locationMessage.text = resp.message || t('node.settings.location_saved');
+  } catch (e) {
+    if (e instanceof ApiAbortError) return;
+    locationMessage.state = 'error';
+    locationMessage.text = t('node.settings.location_failed', {
+      error: messageFromError(e, 'unknown'),
+    });
+  } finally {
+    locationSaving.value = false;
+  }
+}
+
 async function refresh(): Promise<void> {
   message.state = null;
   message.text = t('node.settings.refreshing');
@@ -132,7 +203,7 @@ async function refresh(): Promise<void> {
 
 <template>
   <div class="node-settings" data-test="node-settings-panel">
-    <article class="panel">
+    <article class="panel" data-test="node-token-info-panel">
       <header class="card-head">
         <h2 class="card-title">{{ t('node.settings.token_info') }}</h2>
       </header>
@@ -208,6 +279,99 @@ async function refresh(): Promise<void> {
           </button>
         </div>
         <SettingsMessage :state="serviceMessage.state" :text="serviceMessage.text" />
+      </template>
+      <p v-else class="placeholder">
+        {{ t('common.waiting_for_data') }}
+      </p>
+    </article>
+
+    <article class="panel">
+      <header class="card-head">
+        <h2 class="card-title">{{ t('node.settings.location_override') }}</h2>
+      </header>
+
+      <template v-if="agent">
+        <div class="info-grid location-current">
+          <div class="info-row">
+            <span class="info-label">{{ t('node.settings.location_auto') }}</span>
+            <span class="info-value">{{ automaticLocation }}</span>
+          </div>
+        </div>
+        <div class="location-form">
+          <label class="field">
+            <span>{{ t('node.settings.location_country') }}</span>
+            <input
+              v-model="locationDraft.country"
+              class="field-input"
+              type="text"
+              maxlength="64"
+              placeholder="HK"
+              data-test="node-location-country-input"
+            />
+          </label>
+          <label class="field">
+            <span>{{ t('node.settings.location_city') }}</span>
+            <input
+              v-model="locationDraft.city"
+              class="field-input"
+              type="text"
+              maxlength="64"
+              placeholder="Hong Kong"
+              data-test="node-location-city-input"
+            />
+          </label>
+          <label class="field">
+            <span>{{ t('node.settings.location_latitude') }}</span>
+            <input
+              v-model="locationDraft.latitude"
+              class="field-input"
+              type="number"
+              step="0.000001"
+              min="-90"
+              max="90"
+              placeholder="22.3193"
+              data-test="node-location-latitude-input"
+            />
+          </label>
+          <label class="field">
+            <span>{{ t('node.settings.location_longitude') }}</span>
+            <input
+              v-model="locationDraft.longitude"
+              class="field-input"
+              type="number"
+              step="0.000001"
+              min="-180"
+              max="180"
+              placeholder="114.1694"
+              data-test="node-location-longitude-input"
+            />
+          </label>
+          <div class="location-actions">
+            <button
+              type="button"
+              class="btn btn--primary"
+              :disabled="locationSaving.value"
+              data-test="node-location-save"
+              @click="saveLocationOverride()"
+            >
+              {{
+                locationSaving.value
+                  ? t('node.settings.location_saving')
+                  : t('node.settings.location_save')
+              }}
+            </button>
+            <button
+              type="button"
+              class="btn"
+              :disabled="locationSaving.value"
+              data-test="node-location-clear"
+              @click="saveLocationOverride(true)"
+            >
+              {{ t('node.settings.location_clear') }}
+            </button>
+          </div>
+        </div>
+        <SettingsMessage :state="locationMessage.state" :text="locationMessage.text" />
       </template>
       <p v-else class="placeholder">
         {{ t('common.waiting_for_data') }}
@@ -305,6 +469,15 @@ async function refresh(): Promise<void> {
   gap: 12px;
   align-items: end;
 }
+.location-current {
+  margin-bottom: 12px;
+}
+.location-form {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr)) auto;
+  gap: 12px;
+  align-items: end;
+}
 .field {
   display: flex;
   flex-direction: column;
@@ -351,6 +524,11 @@ async function refresh(): Promise<void> {
 .service-save {
   min-height: 36px;
 }
+.location-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
 .btn {
   align-self: flex-start;
   background: var(--bg-card-soft);
@@ -372,6 +550,17 @@ async function refresh(): Promise<void> {
 @media (max-width: 720px) {
   .service-form {
     grid-template-columns: 1fr;
+  }
+  .location-form {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .location-actions {
+    justify-content: flex-start;
+  }
+}
+@media (max-width: 560px) {
+  .location-form {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 </style>

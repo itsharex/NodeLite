@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { makeNodeStatus } from '@/api/__fixtures__/nodes';
-import { ipFromNode, locationFromNode } from './nodeMeta';
+import { effectiveGeoLocation, ipFromNode, locationFromNode } from './nodeMeta';
 
 describe('locationFromNode', () => {
   it('reads a loc/region/city tag', () => {
@@ -24,6 +24,36 @@ describe('locationFromNode', () => {
       geoip_country: 'JP',
     });
     expect(locationFromNode(node)).toBe('Tokyo, JP');
+  });
+
+  it('uses manual location before tags and geoip', () => {
+    const node = makeNodeStatus({
+      identity: { ...makeNodeStatus().identity, tags: ['region:us-west'] },
+      geoip_city: 'Shenyang',
+      geoip_country: 'CN',
+      location_override_city: 'Hong Kong',
+      location_override_country: 'HK',
+    });
+    expect(locationFromNode(node)).toBe('Hong Kong, HK');
+  });
+
+  it('does not mix automatic geoip fields into a partial manual location', () => {
+    const node = makeNodeStatus({
+      identity: { ...makeNodeStatus().identity, tags: [] },
+      geoip_city: 'Shenyang',
+      geoip_country: 'CN',
+      geoip_latitude: 41.8057,
+      geoip_longitude: 123.4315,
+      location_override_country: '香港',
+    });
+    expect(locationFromNode(node)).toBe('香港');
+    expect(effectiveGeoLocation(node)).toEqual({
+      country: '香港',
+      city: null,
+      latitude: null,
+      longitude: null,
+      manual: true,
+    });
   });
 
   it('reports LAN geoip without hostname inference', () => {

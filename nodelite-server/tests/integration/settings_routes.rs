@@ -21,11 +21,13 @@ use crate::auth::{TWO_FACTOR_AUTH_COOKIE, decode_totp_secret};
 use crate::handlers::{
     change_readonly_password, disable_two_factor, enable_two_factor, refresh_node_token,
     require_readonly_auth, start_server_update, start_two_factor_setup,
+    update_node_location_override,
 };
+use crate::registry::{IssueNodeRequest, issue_node};
 use crate::set_protected_response_headers;
 use crate::state::{SessionCommand, SessionControlHandle, SessionRefreshReply};
 use crate::test_support::{fake_snapshot, synthetic_identity, test_server_config};
-use nodelite_proto::{ReadonlyAuthConfig, parse_server_config};
+use nodelite_proto::{GeoIpLocation, ReadonlyAuthConfig, parse_server_config};
 
 const TEST_TOTP_SECRET: &str = "JBSWY3DPEHPK3PXP";
 static SETTINGS_TEST_ID: AtomicU64 = AtomicU64::new(1);
@@ -300,6 +302,7 @@ async fn settings_node_token_refresh_covers_success_offline_and_timeout_paths() 
             ),
             Some("127.0.0.1".to_string()),
             None,
+            None,
         )
         .await;
     harness
@@ -354,6 +357,7 @@ async fn settings_node_token_refresh_covers_success_offline_and_timeout_paths() 
             ),
             None,
             None,
+            None,
         )
         .await;
     harness
@@ -386,6 +390,7 @@ async fn settings_node_token_refresh_covers_success_offline_and_timeout_paths() 
             ),
             None,
             None,
+            None,
         )
         .await;
     let (timeout_control, _timeout_rx) = SessionControlHandle::channel();
@@ -407,6 +412,115 @@ async fn settings_node_token_refresh_covers_success_offline_and_timeout_paths() 
         ))
         .await?;
     assert_eq!(timed_out.status(), StatusCode::GATEWAY_TIMEOUT);
+
+    harness.cleanup().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn settings_node_location_override_persists_and_updates_runtime_view() -> Result<()> {
+    let harness = SettingsHarness::new(readonly_auth(false, None)).await?;
+    issue_node(
+        harness.state.registry.path(),
+        IssueNodeRequest {
+            node_id: "edge-hkg-01".to_string(),
+            node_label: Some("Edge HKG 01".to_string()),
+            tags: Vec::new(),
+        },
+    )
+    .await?;
+    harness.state.registry.reload().await?;
+
+    let session_id = harness
+        .state
+        .shared
+        .register_node(
+            synthetic_identity("edge-hkg-01", "Edge HKG 01", "test", None, "itest"),
+            Some("203.0.113.7".to_string()),
+            Some(GeoIpLocation {
+                country: "CN".to_string(),
+                city: Some("Shenyang".to_string()),
+                latitude: Some(41.8057),
+                longitude: Some(123.4315),
+            }),
+            None,
+        )
+        .await;
+    harness
+        .state
+        .shared
+        .update_snapshot("edge-hkg-01", session_id, fake_snapshot(1))
+        .await;
+
+    let saved = harness
+        .app
+        .clone()
+        .oneshot(json_request(
+            "/api/nodes/edge-hkg-01/location-override",
+            &basic_auth_header("secret"),
+            None,
+            json!({
+                "country": "香港",
+                "city": "香港",
+                "latitude": 22.3193,
+                "longitude": 114.1694,
+            }),
+        ))
+        .await?;
+    assert_status(saved.status(), StatusCode::OK, saved).await?;
+
+    let registered = registered_node(&harness, "edge-hkg-01").await?;
+    let registry_override = registered
+        .location_override()
+        .expect("registry should retain manual location");
+    assert_eq!(registry_override.country, "香港");
+    assert_eq!(registry_override.city.as_deref(), Some("香港"));
+    assert_eq!(registry_override.latitude, Some(22.3193));
+    assert_eq!(registry_override.longitude, Some(114.1694));
+
+    let status = harness
+        .state
+        .shared
+        .get_status("edge-hkg-01")
+        .await
+        .expect("runtime node should exist");
+    assert_eq!(status.geoip_country.as_deref(), Some("CN"));
+    assert_eq!(status.geoip_city.as_deref(), Some("Shenyang"));
+    assert_eq!(status.location_override_country.as_deref(), Some("香港"));
+    assert_eq!(status.location_override_city.as_deref(), Some("香港"));
+    assert_eq!(status.location_override_latitude, Some(22.3193));
+    assert_eq!(status.location_override_longitude, Some(114.1694));
+
+    let cleared = harness
+        .app
+        .clone()
+        .oneshot(json_request(
+            "/api/nodes/edge-hkg-01/location-override",
+            &basic_auth_header("secret"),
+            None,
+            json!({
+                "country": null,
+                "city": null,
+                "latitude": null,
+                "longitude": null,
+            }),
+        ))
+        .await?;
+    assert_status(cleared.status(), StatusCode::OK, cleared).await?;
+
+    let registered = registered_node(&harness, "edge-hkg-01").await?;
+    assert!(registered.location_override().is_none());
+    let status = harness
+        .state
+        .shared
+        .get_status("edge-hkg-01")
+        .await
+        .expect("runtime node should remain visible");
+    assert_eq!(status.geoip_country.as_deref(), Some("CN"));
+    assert!(status.location_override_country.is_none());
+    assert!(status.location_override_city.is_none());
+    assert!(status.location_override_latitude.is_none());
+    assert!(status.location_override_longitude.is_none());
 
     harness.cleanup().await;
     Ok(())
@@ -455,9 +569,27 @@ fn settings_app(state: crate::AppState) -> Router {
             "/api/nodes/{node_id}/refresh-token",
             post(refresh_node_token),
         )
+        .route(
+            "/api/nodes/{node_id}/location-override",
+            post(update_node_location_override),
+        )
         .route_layer(from_fn(set_protected_response_headers))
         .route_layer(from_fn_with_state(state.clone(), require_readonly_auth));
     Router::new().merge(protected_routes).with_state(state)
+}
+
+async fn registered_node(
+    harness: &SettingsHarness,
+    node_id: &str,
+) -> Result<crate::registry::RegisteredNode> {
+    harness
+        .state
+        .registry
+        .list_registered_nodes()
+        .await
+        .into_iter()
+        .find(|node| node.node_id == node_id)
+        .ok_or_else(|| anyhow::anyhow!("registered node {node_id} not found"))
 }
 
 fn readonly_auth(enable_2fa: bool, totp_secret: Option<&str>) -> ReadonlyAuthConfig {

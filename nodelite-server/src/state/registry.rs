@@ -31,6 +31,10 @@ struct NodeEntry {
     geoip_city: Option<String>,
     geoip_latitude: Option<f64>,
     geoip_longitude: Option<f64>,
+    location_override_country: Option<String>,
+    location_override_city: Option<String>,
+    location_override_latitude: Option<f64>,
+    location_override_longitude: Option<f64>,
     snapshot: Option<NodeSnapshot>,
     last_seen: Option<DateTime<Utc>>,
     latency_ms: Option<u64>,
@@ -45,10 +49,17 @@ impl NodeEntry {
         identity: NodeIdentity,
         remote_ip: Option<String>,
         geoip: Option<GeoIpLocation>,
+        location_override: Option<GeoIpLocation>,
         now: DateTime<Utc>,
     ) -> Self {
         let (geoip_country, geoip_city, geoip_latitude, geoip_longitude) =
             geoip_fields_from_location(geoip.as_ref());
+        let (
+            location_override_country,
+            location_override_city,
+            location_override_latitude,
+            location_override_longitude,
+        ) = geoip_fields_from_location(location_override.as_ref());
         Self {
             identity,
             remote_ip,
@@ -56,6 +67,10 @@ impl NodeEntry {
             geoip_city,
             geoip_latitude,
             geoip_longitude,
+            location_override_country,
+            location_override_city,
+            location_override_latitude,
+            location_override_longitude,
             snapshot: None,
             last_seen: Some(now),
             latency_ms: None,
@@ -74,6 +89,10 @@ impl NodeEntry {
             geoip_city: status.geoip_city,
             geoip_latitude: status.geoip_latitude,
             geoip_longitude: status.geoip_longitude,
+            location_override_country: status.location_override_country,
+            location_override_city: status.location_override_city,
+            location_override_latitude: status.location_override_latitude,
+            location_override_longitude: status.location_override_longitude,
             snapshot: status.snapshot,
             last_seen: status.last_seen,
             latency_ms: status.latency_ms,
@@ -89,16 +108,27 @@ impl NodeEntry {
         identity: NodeIdentity,
         remote_ip: Option<String>,
         geoip: Option<GeoIpLocation>,
+        location_override: Option<GeoIpLocation>,
         now: DateTime<Utc>,
     ) {
         let (geoip_country, geoip_city, geoip_latitude, geoip_longitude) =
             geoip_fields_from_location(geoip.as_ref());
+        let (
+            location_override_country,
+            location_override_city,
+            location_override_latitude,
+            location_override_longitude,
+        ) = geoip_fields_from_location(location_override.as_ref());
         self.identity = identity;
         self.remote_ip = remote_ip;
         self.geoip_country = geoip_country;
         self.geoip_city = geoip_city;
         self.geoip_latitude = geoip_latitude;
         self.geoip_longitude = geoip_longitude;
+        self.location_override_country = location_override_country;
+        self.location_override_city = location_override_city;
+        self.location_override_latitude = location_override_latitude;
+        self.location_override_longitude = location_override_longitude;
         self.online = true;
         self.last_seen = Some(now);
         self.latency_ms = None;
@@ -114,6 +144,10 @@ impl NodeEntry {
             geoip_city: self.geoip_city.clone(),
             geoip_latitude: self.geoip_latitude,
             geoip_longitude: self.geoip_longitude,
+            location_override_country: self.location_override_country.clone(),
+            location_override_city: self.location_override_city.clone(),
+            location_override_latitude: self.location_override_latitude,
+            location_override_longitude: self.location_override_longitude,
             snapshot: self.snapshot.clone(),
             last_seen: self.last_seen,
             latency_ms: self.latency_ms,
@@ -128,6 +162,10 @@ impl NodeEntry {
             geoip_city: self.geoip_city.clone(),
             geoip_latitude: self.geoip_latitude,
             geoip_longitude: self.geoip_longitude,
+            location_override_country: self.location_override_country.clone(),
+            location_override_city: self.location_override_city.clone(),
+            location_override_latitude: self.location_override_latitude,
+            location_override_longitude: self.location_override_longitude,
             snapshot: self.snapshot.as_ref().map(NodeListSnapshot::from),
             latency_ms: self.latency_ms,
             online: self.online,
@@ -171,15 +209,30 @@ impl Registry {
         identity: NodeIdentity,
         remote_ip: Option<String>,
         geoip: Option<GeoIpLocation>,
+        location_override: Option<GeoIpLocation>,
         now: DateTime<Utc>,
     ) {
         let node_id = identity.node_id.clone();
         if let Some(entry) = self.nodes.get_mut(&node_id) {
-            entry.register_session(session_id, identity, remote_ip, geoip, now);
+            entry.register_session(
+                session_id,
+                identity,
+                remote_ip,
+                geoip,
+                location_override,
+                now,
+            );
         } else {
             self.nodes.insert(
                 node_id.clone(),
-                NodeEntry::new(session_id, identity, remote_ip, geoip, now),
+                NodeEntry::new(
+                    session_id,
+                    identity,
+                    remote_ip,
+                    geoip,
+                    location_override,
+                    now,
+                ),
             );
             self.sorted_node_ids.push(node_id);
         }
@@ -347,6 +400,35 @@ impl Registry {
         entry.geoip_city = geoip_city;
         entry.geoip_latitude = geoip_latitude;
         entry.geoip_longitude = geoip_longitude;
+        true
+    }
+
+    pub(super) fn update_location_override(
+        &mut self,
+        node_id: &str,
+        location_override: Option<GeoIpLocation>,
+    ) -> bool {
+        let Some(entry) = self.nodes.get_mut(node_id) else {
+            return false;
+        };
+        let (
+            location_override_country,
+            location_override_city,
+            location_override_latitude,
+            location_override_longitude,
+        ) = geoip_fields_from_location(location_override.as_ref());
+        if entry.location_override_country == location_override_country
+            && entry.location_override_city == location_override_city
+            && entry.location_override_latitude == location_override_latitude
+            && entry.location_override_longitude == location_override_longitude
+        {
+            return false;
+        }
+
+        entry.location_override_country = location_override_country;
+        entry.location_override_city = location_override_city;
+        entry.location_override_latitude = location_override_latitude;
+        entry.location_override_longitude = location_override_longitude;
         true
     }
 

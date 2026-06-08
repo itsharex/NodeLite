@@ -23,6 +23,7 @@ import type {
   SettingsResponse,
   ServerUpdateLogResponse,
   TwoFactorSetupResponse,
+  UpdateNodeLocationOverrideRequest,
   UpdateAlertSettingsRequest,
   UpdateNodeServiceMetadataRequest,
 } from './types';
@@ -75,6 +76,7 @@ export type {
   UpdateAlertSmtpSettingsRequest,
   UpdateAlertWebhookSettingsRequest,
   UpdateInspectionSettingsRequest,
+  UpdateNodeLocationOverrideRequest,
   UpdateNodeServiceMetadataRequest,
 } from './types';
 
@@ -143,4 +145,9 @@ export const apiClient = {
     postJson<NodeTokenRefreshResponse>(`/api/nodes/${encodeURIComponent(id)}/refresh-token`, body),
   updateNodeServiceMetadata: (id: string, body: UpdateNodeServiceMetadataRequest) =>
     postJson<SettingsActionResponse>(`/api/nodes/${encodeURIComponent(id)}/service-meta`, body),
+  updateNodeLocationOverride: (id: string, body: UpdateNodeLocationOverrideRequest) =>
+    postJson<SettingsActionResponse>(
+      `/api/nodes/${encodeURIComponent(id)}/location-override`,
+      body,
+    ),
 };

@@ -142,6 +142,14 @@ pub struct NodeStatus {
     pub geoip_latitude: Option<f64>,
     #[serde(default)]
     pub geoip_longitude: Option<f64>,
+    #[serde(default)]
+    pub location_override_country: Option<String>,
+    #[serde(default)]
+    pub location_override_city: Option<String>,
+    #[serde(default)]
+    pub location_override_latitude: Option<f64>,
+    #[serde(default)]
+    pub location_override_longitude: Option<f64>,
     pub snapshot: Option<NodeSnapshot>,
     pub last_seen: Option<DateTime<Utc>>,
     pub latency_ms: Option<u64>,
@@ -160,6 +168,14 @@ pub struct NodeListItem {
     pub geoip_latitude: Option<f64>,
     #[serde(default)]
     pub geoip_longitude: Option<f64>,
+    #[serde(default)]
+    pub location_override_country: Option<String>,
+    #[serde(default)]
+    pub location_override_city: Option<String>,
+    #[serde(default)]
+    pub location_override_latitude: Option<f64>,
+    #[serde(default)]
+    pub location_override_longitude: Option<f64>,
     pub snapshot: Option<NodeListSnapshot>,
     pub latency_ms: Option<u64>,
     pub online: bool,
@@ -258,6 +274,10 @@ impl From<&NodeStatus> for NodeListItem {
             geoip_city: status.geoip_city.clone(),
             geoip_latitude: status.geoip_latitude,
             geoip_longitude: status.geoip_longitude,
+            location_override_country: status.location_override_country.clone(),
+            location_override_city: status.location_override_city.clone(),
+            location_override_latitude: status.location_override_latitude,
+            location_override_longitude: status.location_override_longitude,
             snapshot: status.snapshot.as_ref().map(NodeListSnapshot::from),
             latency_ms: status.latency_ms,
             online: status.online,

@@ -39,6 +39,10 @@ fn legacy_node(
         service_expires_at: None,
         service_unlimited: false,
         renewal_price: None,
+        location_override_country: None,
+        location_override_city: None,
+        location_override_latitude_microdegrees: None,
+        location_override_longitude_microdegrees: None,
     }
 }
 

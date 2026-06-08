@@ -53,6 +53,10 @@ export interface NodeListItem {
   geoip_city: string | null;
   geoip_latitude: number | null;
   geoip_longitude: number | null;
+  location_override_country: string | null;
+  location_override_city: string | null;
+  location_override_latitude: number | null;
+  location_override_longitude: number | null;
   snapshot: NodeListSnapshot | null;
   latency_ms: number | null;
   online: boolean;
@@ -146,6 +150,10 @@ export interface NodeStatus {
   geoip_city: string | null;
   geoip_latitude: number | null;
   geoip_longitude: number | null;
+  location_override_country: string | null;
+  location_override_city: string | null;
+  location_override_latitude: number | null;
+  location_override_longitude: number | null;
   snapshot: NodeSnapshot | null;
   last_seen: string | null;
   latency_ms: number | null;
@@ -198,6 +206,14 @@ export interface SettingsAgentToken {
   service_expires_at: string | null;
   service_unlimited: boolean;
   renewal_price: string | null;
+  geoip_country: string | null;
+  geoip_city: string | null;
+  geoip_latitude: number | null;
+  geoip_longitude: number | null;
+  location_override_country: string | null;
+  location_override_city: string | null;
+  location_override_latitude: number | null;
+  location_override_longitude: number | null;
 }
 
 /** GET /api/settings — SettingsResponse (flat + nested) */
@@ -235,6 +251,14 @@ export interface UpdateNodeServiceMetadataRequest {
   service_expires_at: string | null;
   service_unlimited: boolean;
   renewal_price: string | null;
+}
+
+/** POST /api/nodes/{id}/location-override */
+export interface UpdateNodeLocationOverrideRequest {
+  country: string | null;
+  city: string | null;
+  latitude: number | null;
+  longitude: number | null;
 }
 
 /** GET /api/settings/2fa/start — TwoFactorSetupResponse */

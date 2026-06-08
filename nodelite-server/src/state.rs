@@ -144,11 +144,19 @@ impl SharedState {
         identity: NodeIdentity,
         remote_ip: Option<String>,
         geoip: Option<GeoIpLocation>,
+        location_override: Option<GeoIpLocation>,
     ) -> u64 {
         let session_id = self.next_session_id.fetch_add(1, Ordering::Relaxed);
         let now = Utc::now();
         let mut registry = self.registry.write().await;
-        registry.register_node(session_id, identity, remote_ip, geoip, now);
+        registry.register_node(
+            session_id,
+            identity,
+            remote_ip,
+            geoip,
+            location_override,
+            now,
+        );
         self.bump_view_revision();
         session_id
     }
@@ -254,6 +262,36 @@ impl SharedState {
         }
         if updated > 0 {
             self.bump_nodes_revision_only();
+        }
+        updated
+    }
+
+    pub(crate) async fn update_location_override(
+        &self,
+        node_id: &str,
+        location_override: Option<GeoIpLocation>,
+    ) -> bool {
+        let mut registry = self.registry.write().await;
+        let updated = registry.update_location_override(node_id, location_override);
+        if updated {
+            self.bump_view_revision();
+        }
+        updated
+    }
+
+    pub(crate) async fn apply_location_overrides(
+        &self,
+        overrides: Vec<(String, Option<GeoIpLocation>)>,
+    ) -> usize {
+        let mut updated = 0;
+        let mut registry = self.registry.write().await;
+        for (node_id, location_override) in overrides {
+            if registry.update_location_override(&node_id, location_override) {
+                updated += 1;
+            }
+        }
+        if updated > 0 {
+            self.bump_view_revision();
         }
         updated
     }

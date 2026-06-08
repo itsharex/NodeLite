@@ -214,6 +214,10 @@ describe('WsClient', () => {
           geoip_city: null,
           geoip_latitude: null,
           geoip_longitude: null,
+          location_override_country: null,
+          location_override_city: null,
+          location_override_latitude: null,
+          location_override_longitude: null,
           snapshot: {
             cpu_usage_percent: 50,
             load: { one: 1.5 },

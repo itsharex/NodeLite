@@ -26,12 +26,14 @@ fn newer_session_replaces_older_one() {
         identity.clone(),
         Some("198.51.100.10".to_string()),
         None,
+        None,
         now,
     );
     registry.register_node(
         2,
         identity,
         Some("198.51.100.11".to_string()),
+        None,
         None,
         now + ChronoDuration::seconds(3),
     );
@@ -72,6 +74,7 @@ fn newer_session_refreshes_remote_ip_and_geoip() {
             latitude: Some(37.386),
             longitude: Some(-122.0838),
         }),
+        None,
         now,
     );
     registry.register_node(
@@ -84,6 +87,7 @@ fn newer_session_refreshes_remote_ip_and_geoip() {
             latitude: Some(35.6762),
             longitude: Some(139.6503),
         }),
+        None,
         now + ChronoDuration::seconds(3),
     );
 
@@ -118,6 +122,7 @@ fn stale_nodes_are_marked_offline() {
         sample_identity(),
         Some("198.51.100.10".to_string()),
         None,
+        None,
         now,
     );
     assert_eq!(
@@ -145,6 +150,7 @@ fn session_control_is_only_available_for_current_online_session() {
         sample_identity(),
         Some("198.51.100.10".to_string()),
         None,
+        None,
         now,
     );
 
@@ -156,6 +162,7 @@ fn session_control_is_only_available_for_current_online_session() {
         8,
         sample_identity(),
         Some("198.51.100.11".to_string()),
+        None,
         None,
         now + ChronoDuration::seconds(1),
     );
@@ -176,6 +183,7 @@ fn mark_disconnected_clears_session_control() {
         9,
         sample_identity(),
         Some("198.51.100.10".to_string()),
+        None,
         None,
         now,
     );
@@ -229,6 +237,10 @@ fn runtime_entry_retained_heap_is_lower_than_cached_external_models() {
         geoip_city: Some("Hong Kong".to_string()),
         geoip_latitude: Some(22.3193),
         geoip_longitude: Some(114.1694),
+        location_override_country: None,
+        location_override_city: None,
+        location_override_latitude: None,
+        location_override_longitude: None,
         snapshot: Some(snapshot),
         last_seen: Some(Utc::now()),
         latency_ms: Some(42),
@@ -263,6 +275,10 @@ async fn restore_statuses_reassembles_detail_and_lightweight_api_views() {
         geoip_city: Some("Hong Kong".to_string()),
         geoip_latitude: Some(22.3193),
         geoip_longitude: Some(114.1694),
+        location_override_country: None,
+        location_override_city: None,
+        location_override_latitude: None,
+        location_override_longitude: None,
         snapshot: Some(snapshot),
         last_seen: Some(Utc::now()),
         latency_ms: Some(42),
@@ -301,7 +317,12 @@ async fn restore_statuses_reassembles_detail_and_lightweight_api_views() {
 async fn registry_disk_entries_total_counts_snapshot_disks() {
     let shared = SharedState::new(Arc::new(sample_config()));
     let first_session = shared
-        .register_node(sample_identity(), Some("198.51.100.10".to_string()), None)
+        .register_node(
+            sample_identity(),
+            Some("198.51.100.10".to_string()),
+            None,
+            None,
+        )
         .await;
     let second_session = shared
         .register_node(
@@ -311,6 +332,7 @@ async fn registry_disk_entries_total_counts_snapshot_disks() {
                 ..sample_identity()
             },
             Some("198.51.100.11".to_string()),
+            None,
             None,
         )
         .await;
@@ -340,7 +362,7 @@ async fn registry_disk_entries_total_counts_snapshot_disks() {
 async fn refresh_geoip_locations_updates_online_node_view() {
     let shared = SharedState::new(Arc::new(sample_config()));
     let _session_id = shared
-        .register_node(sample_identity(), Some("8.8.8.8".to_string()), None)
+        .register_node(sample_identity(), Some("8.8.8.8".to_string()), None, None)
         .await;
 
     assert_eq!(
@@ -379,10 +401,56 @@ async fn refresh_geoip_locations_updates_online_node_view() {
 }
 
 #[tokio::test]
+async fn location_override_updates_online_node_view() {
+    let shared = SharedState::new(Arc::new(sample_config()));
+    shared
+        .register_node(
+            sample_identity(),
+            Some("8.8.8.8".to_string()),
+            Some(GeoIpLocation {
+                country: "CN".to_string(),
+                city: Some("Shenyang".to_string()),
+                latitude: Some(41.8057),
+                longitude: Some(123.4315),
+            }),
+            None,
+        )
+        .await;
+
+    assert!(
+        shared
+            .update_location_override(
+                "hk-01",
+                Some(GeoIpLocation {
+                    country: "HK".to_string(),
+                    city: Some("Hong Kong".to_string()),
+                    latitude: Some(22.3193),
+                    longitude: Some(114.1694),
+                }),
+            )
+            .await
+    );
+
+    let status = shared.get_status("hk-01").await.expect("node status");
+    assert_eq!(status.geoip_country.as_deref(), Some("CN"));
+    assert_eq!(status.location_override_country.as_deref(), Some("HK"));
+    assert_eq!(status.location_override_city.as_deref(), Some("Hong Kong"));
+
+    let summary = shared
+        .list_node_summaries()
+        .await
+        .into_iter()
+        .find(|node| node.identity.node_id == "hk-01")
+        .expect("node summary");
+    assert_eq!(summary.location_override_country.as_deref(), Some("HK"));
+    assert_eq!(summary.location_override_latitude, Some(22.3193));
+}
+
+#[tokio::test]
 async fn refresh_geoip_locations_skips_stale_remote_ip() {
     let shared = SharedState::new(Arc::new(sample_config()));
     shared
-        .register_node(sample_identity(), Some("8.8.8.8".to_string()), None)
+        .register_node(sample_identity(), Some("8.8.8.8".to_string()), None, None)
         .await;
 
     let updated = shared

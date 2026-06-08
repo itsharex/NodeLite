@@ -4,7 +4,12 @@ use super::*;
 async fn cached_api_json_invalidates_after_visible_status_change() {
     let shared = SharedState::new(Arc::new(sample_config()));
     let session_id = shared
-        .register_node(sample_identity(), Some("198.51.100.10".to_string()), None)
+        .register_node(
+            sample_identity(),
+            Some("198.51.100.10".to_string()),
+            None,
+            None,
+        )
         .await;
 
     let first_nodes = shared.nodes_json_bytes().await.expect("nodes json");
@@ -41,7 +46,12 @@ async fn cached_api_json_invalidates_after_visible_status_change() {
 async fn concurrent_api_cache_miss_serializes_once() {
     let shared = SharedState::new(Arc::new(sample_config()));
     shared
-        .register_node(sample_identity(), Some("198.51.100.10".to_string()), None)
+        .register_node(
+            sample_identity(),
+            Some("198.51.100.10".to_string()),
+            None,
+            None,
+        )
         .await;
 
     let mut tasks = Vec::new();
@@ -69,7 +79,12 @@ async fn concurrent_api_cache_miss_serializes_once() {
 async fn api_overview_and_nodes_caches_build_independently() {
     let shared = SharedState::new(Arc::new(sample_config()));
     shared
-        .register_node(sample_identity(), Some("198.51.100.10".to_string()), None)
+        .register_node(
+            sample_identity(),
+            Some("198.51.100.10".to_string()),
+            None,
+            None,
+        )
         .await;
 
     let first_overview = shared.overview_json_bytes().await.expect("overview json");
@@ -114,7 +129,12 @@ async fn snapshot_update_only_invalidates_nodes_view() {
     let shared = SharedState::new(Arc::new(sample_config()));
     let readiness = crate::ServerReadiness::new(true);
     let session_id = shared
-        .register_node(sample_identity(), Some("198.51.100.10".to_string()), None)
+        .register_node(
+            sample_identity(),
+            Some("198.51.100.10".to_string()),
+            None,
+            None,
+        )
         .await;
 
     let _ = shared.overview_json_bytes().await.expect("overview json");
@@ -166,7 +186,12 @@ async fn metrics_cache_reuses_and_invalidates_cleanly() {
     let shared = SharedState::new(Arc::new(sample_config()));
     let readiness = crate::ServerReadiness::new(true);
     let session_id = shared
-        .register_node(sample_identity(), Some("198.51.100.10".to_string()), None)
+        .register_node(
+            sample_identity(),
+            Some("198.51.100.10".to_string()),
+            None,
+            None,
+        )
         .await;
     assert!(
         shared

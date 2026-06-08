@@ -39,6 +39,10 @@ fn fake_status_for(node_id: &str, recorded_at: chrono::DateTime<Utc>) -> NodeSta
         geoip_city: None,
         geoip_latitude: None,
         geoip_longitude: None,
+        location_override_country: None,
+        location_override_city: None,
+        location_override_latitude: None,
+        location_override_longitude: None,
         snapshot: Some(NodeSnapshot {
             collected_at: recorded_at,
             cpu_usage_percent: Some(42.0),

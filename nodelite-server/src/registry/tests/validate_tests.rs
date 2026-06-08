@@ -15,6 +15,10 @@ fn validate_registered_node_rejects_oversized_tags() {
         service_expires_at: None,
         service_unlimited: false,
         renewal_price: None,
+        location_override_country: None,
+        location_override_city: None,
+        location_override_latitude_microdegrees: None,
+        location_override_longitude_microdegrees: None,
     };
     node.tags = vec!["x".repeat(MAX_NODE_TAG_BYTES + 1)];
 
@@ -36,6 +40,10 @@ fn validate_registered_node_rejects_invalid_renewal_price() {
         service_expires_at: None,
         service_unlimited: false,
         renewal_price: Some("bad\nprice".to_string()),
+        location_override_country: None,
+        location_override_city: None,
+        location_override_latitude_microdegrees: None,
+        location_override_longitude_microdegrees: None,
     };
 
     let error = validate_registered_node(&node).expect_err("control chars should fail");

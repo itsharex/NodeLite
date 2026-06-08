@@ -16,6 +16,7 @@ vi.mock('@/api', async () => {
       settings: vi.fn(),
       refreshNodeToken: vi.fn(),
       updateNodeServiceMetadata: vi.fn(),
+      updateNodeLocationOverride: vi.fn(),
     },
   };
 });
@@ -23,6 +24,7 @@ vi.mock('@/api', async () => {
 const mockSettings = vi.mocked(apiClient.settings);
 const mockRefresh = vi.mocked(apiClient.refreshNodeToken);
 const mockUpdateMeta = vi.mocked(apiClient.updateNodeServiceMetadata);
+const mockUpdateLocation = vi.mocked(apiClient.updateNodeLocationOverride);
 
 const FAKE_DICT = {
   en: {
@@ -42,6 +44,18 @@ const FAKE_DICT = {
     'node.settings.service_meta_saving': 'Saving…',
     'node.settings.service_meta_saved': 'Saved',
     'node.settings.service_meta_failed': 'Save failed: {error}',
+    'node.settings.location_override': 'Manual Location',
+    'node.settings.location_auto': 'Auto detected',
+    'node.settings.location_country': 'Country / region',
+    'node.settings.location_city': 'City',
+    'node.settings.location_latitude': 'Latitude',
+    'node.settings.location_longitude': 'Longitude',
+    'node.settings.location_save': 'Save',
+    'node.settings.location_saving': 'Saving…',
+    'node.settings.location_clear': 'Clear',
+    'node.settings.location_saved': 'Location saved',
+    'node.settings.location_failed': 'Location save failed: {error}',
+    'node.settings.location_invalid_number': 'Latitude and longitude must be valid numbers.',
     'node.settings.refresh_token': 'Refresh Token',
     'node.settings.refresh_note': 'Generate a new token for this node',
     'node.settings.refresh_button': 'Refresh',
@@ -76,6 +90,14 @@ describe('NodeSettingsPanel', () => {
             service_expires_at: '2026-12-31T00:00:00Z',
             service_unlimited: false,
             renewal_price: '$4/mo',
+            geoip_country: 'CN',
+            geoip_city: 'Shenyang',
+            geoip_latitude: 41.8057,
+            geoip_longitude: 123.4315,
+            location_override_country: null,
+            location_override_city: null,
+            location_override_latitude: null,
+            location_override_longitude: null,
           },
           {
             node_id: 'node-b',
@@ -89,6 +111,14 @@ describe('NodeSettingsPanel', () => {
             service_expires_at: null,
             service_unlimited: false,
             renewal_price: null,
+            geoip_country: null,
+            geoip_city: null,
+            geoip_latitude: null,
+            geoip_longitude: null,
+            location_override_country: null,
+            location_override_city: null,
+            location_override_latitude: null,
+            location_override_longitude: null,
           },
         ],
       }),
@@ -102,6 +132,10 @@ describe('NodeSettingsPanel', () => {
     mockUpdateMeta.mockResolvedValue({
       ok: true,
       message: 'Saved',
+    });
+    mockUpdateLocation.mockResolvedValue({
+      ok: true,
+      message: 'Location saved',
     });
     vi.stubGlobal(
       'fetch',
@@ -138,7 +172,7 @@ describe('NodeSettingsPanel', () => {
 
   it('loads token info when the settings store is empty', async () => {
     const wrapper = await mountPanel('node-a', { preload: false });
-    const rows = wrapper.findAll('.info-row');
+    const rows = wrapper.find('[data-test="node-token-info-panel"]').findAll('.info-row');
 
     expect(mockSettings).toHaveBeenCalledTimes(1);
     expect(rows).toHaveLength(2);
@@ -148,7 +182,7 @@ describe('NodeSettingsPanel', () => {
   it('renders token info for the matched node', async () => {
     const wrapper = await mountPanel('node-a');
     expect(wrapper.find('[data-test="node-settings-panel"]').exists()).toBe(true);
-    const rows = wrapper.findAll('.info-row');
+    const rows = wrapper.find('[data-test="node-token-info-panel"]').findAll('.info-row');
     expect(rows).toHaveLength(2);
     expect(rows[0]?.text()).toContain('Status');
     expect(rows[0]?.text()).toContain('15 days');
@@ -157,7 +191,7 @@ describe('NodeSettingsPanel', () => {
 
   it('shows "never expires" when token_expires_at is null', async () => {
     const wrapper = await mountPanel('node-b');
-    const rows = wrapper.findAll('.info-row');
+    const rows = wrapper.find('[data-test="node-token-info-panel"]').findAll('.info-row');
     expect(rows).toHaveLength(1);
     expect(rows[0]?.text()).toContain('Never expires');
   });
@@ -203,6 +237,27 @@ describe('NodeSettingsPanel', () => {
       service_unlimited: true,
       renewal_price: '$4/mo',
     });
+  });
+
+  it('saves a manual location override from the node tab', async () => {
+    const wrapper = await mountPanel('node-a');
+    expect(wrapper.text()).toContain('Shenyang, CN');
+
+    await wrapper.find('[data-test="node-location-country-input"]').setValue(' HK ');
+    await wrapper.find('[data-test="node-location-city-input"]').setValue(' Hong Kong ');
+    await wrapper.find('[data-test="node-location-latitude-input"]').setValue('22.3193');
+    await wrapper.find('[data-test="node-location-longitude-input"]').setValue('114.1694');
+    await wrapper.find('[data-test="node-location-save"]').trigger('click');
+    await flushPromises();
+
+    expect(mockUpdateLocation).toHaveBeenCalledWith('node-a', {
+      country: 'HK',
+      city: 'Hong Kong',
+      latitude: 22.3193,
+      longitude: 114.1694,
+    });
+    expect(mockSettings).toHaveBeenCalledTimes(2);
+    expect(wrapper.find('[data-test="settings-message"]').text()).toBe('Location saved');
   });
 
   it('surfaces the server error message when refresh fails', async () => {

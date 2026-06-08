@@ -48,6 +48,18 @@ pub(crate) async fn settings(State(state): State<AppState>) -> impl IntoResponse
                 service_expires_at: node.service_expires_at,
                 service_unlimited: node.service_unlimited,
                 renewal_price: node.renewal_price,
+                geoip_country: status.and_then(|status| status.geoip_country.clone()),
+                geoip_city: status.and_then(|status| status.geoip_city.clone()),
+                geoip_latitude: status.and_then(|status| status.geoip_latitude),
+                geoip_longitude: status.and_then(|status| status.geoip_longitude),
+                location_override_country: node.location_override_country,
+                location_override_city: node.location_override_city,
+                location_override_latitude: node
+                    .location_override_latitude_microdegrees
+                    .map(|value| f64::from(value) / 1_000_000.0),
+                location_override_longitude: node
+                    .location_override_longitude_microdegrees
+                    .map(|value| f64::from(value) / 1_000_000.0),
             }
         })
         .collect();

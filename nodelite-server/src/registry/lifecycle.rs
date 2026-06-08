@@ -6,7 +6,7 @@ use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use nodelite_proto::{validate_identifier, validate_non_empty};
 use tokio::sync::{RwLock, Semaphore};
 
-use crate::sanitize::sanitize_renewal_price;
+use crate::sanitize::{sanitize_location_override, sanitize_renewal_price};
 
 use super::auth::default_token_verify_limit;
 use super::storage::{
@@ -16,7 +16,7 @@ use super::storage::{
 use super::token::{constant_time_eq, generate_token, hash_token, prune_expired_install_sessions};
 use super::{
     ConsumedInstall, DEFAULT_TOKEN_VALIDITY_DAYS, NodeRegistry, RegisteredNode, RegistryError,
-    RegistryFile, RegistryReloadCheckpoint, RegistryResult,
+    RegistryFile, RegistryReloadCheckpoint, RegistryResult, coordinate_to_microdegrees,
 };
 
 impl NodeRegistry {
@@ -168,6 +168,60 @@ impl NodeRegistry {
 
         self.replace_state_from_file(file).await?;
         Ok(node)
+    }
+
+    /// 更新设置页展示与地图落点使用的手动位置覆盖。
+    pub async fn update_location_override(
+        &self,
+        node_id: &str,
+        country: Option<String>,
+        city: Option<String>,
+        latitude: Option<f64>,
+        longitude: Option<f64>,
+    ) -> RegistryResult<RegisteredNode> {
+        validate_identifier("node_id", node_id).map_err(RegistryError::validation)?;
+        let location = sanitize_location_override(country, city, latitude, longitude)
+            .map_err(RegistryError::validation)?;
+        let node_id = node_id.to_string();
+        let path = Arc::clone(&self.path);
+        let (node, file) = mutate_registry_file(path.as_ref(), move |file| {
+            let Some(node) = file.nodes.iter_mut().find(|node| node.node_id == node_id) else {
+                return Err(RegistryError::NodeNotFound(node_id.clone()));
+            };
+            match location.as_ref() {
+                Some(location) => {
+                    node.location_override_country = Some(location.country.clone());
+                    node.location_override_city = location.city.clone();
+                    node.location_override_latitude_microdegrees =
+                        location.latitude.map(coordinate_to_microdegrees);
+                    node.location_override_longitude_microdegrees =
+                        location.longitude.map(coordinate_to_microdegrees);
+                }
+                None => {
+                    node.location_override_country = None;
+                    node.location_override_city = None;
+                    node.location_override_latitude_microdegrees = None;
+                    node.location_override_longitude_microdegrees = None;
+                }
+            }
+            super::validate::validate_registered_node(node)?;
+            Ok((node.clone(), true))
+        })
+        .await?;
+
+        self.replace_state_from_file(file).await?;
+        Ok(node)
+    }
+
+    pub async fn list_location_overrides(
+        &self,
+    ) -> Vec<(String, Option<nodelite_proto::GeoIpLocation>)> {
+        let state = self.state.read().await;
+        state
+            .entries
+            .values()
+            .map(|node| (node.node_id.clone(), node.location_override()))
+            .collect()
     }
 
     /// 返回当前注册表里的全部 node_id,用于跨模块做被动清理。

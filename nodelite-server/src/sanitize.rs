@@ -9,8 +9,8 @@ use std::collections::{HashSet, VecDeque};
 use std::time::{Duration, Instant};
 
 use nodelite_proto::{
-    DiskUsage, LoadAverage, MemoryUsage, NetworkCounters, NodeSnapshot, ServerConfig, percentage,
-    truncate_string_to_byte_boundary,
+    DiskUsage, GeoIpLocation, LoadAverage, MemoryUsage, NetworkCounters, NodeSnapshot,
+    ServerConfig, percentage, truncate_string_to_byte_boundary,
 };
 
 /// 历史采样中允许的最大磁盘条目数,防止恶意 Agent 制造海量条目。
@@ -24,6 +24,8 @@ pub const MAX_SANITIZED_RATE_BYTES_PER_SEC: f64 = 1_000_000_000_000.0;
 pub const MAX_SANITIZED_LOAD: f64 = 1_000_000.0;
 /// 续费价格只用于 UI 展示,限制长度避免污染设置页或注册表。
 pub const MAX_RENEWAL_PRICE_BYTES: usize = 64;
+/// 手动位置覆盖只用于 UI 展示和地图落点,限制长度避免污染设置页或注册表。
+pub const MAX_LOCATION_OVERRIDE_TEXT_BYTES: usize = 64;
 /// 一个 WebSocket 会话在 `METRIC_ANOMALY_WINDOW_SECS` 窗口内允许出现的异常
 /// metrics 报告次数,超过即主动断开。
 /// 滑动窗口的设计避免了"长会话偶发异常累积"造成的误判:任何 anomaly 在窗口
@@ -158,6 +160,92 @@ pub fn validate_renewal_price(value: &str) -> Result<(), &'static str> {
         return Err("renewal price must not be empty");
     }
     sanitize_renewal_price(Some(value.to_string())).map(|_| ())
+}
+
+pub fn sanitize_location_override(
+    country: Option<String>,
+    city: Option<String>,
+    latitude: Option<f64>,
+    longitude: Option<f64>,
+) -> Result<Option<GeoIpLocation>, &'static str> {
+    let country = sanitize_location_text(country, "location country")?;
+    let city = sanitize_location_text(city, "location city")?;
+    if country.is_none() && city.is_none() && latitude.is_none() && longitude.is_none() {
+        return Ok(None);
+    }
+
+    let Some(country) = country else {
+        return Err("location country is required when location override is set");
+    };
+    let (latitude, longitude) = sanitize_location_coordinates(latitude, longitude)?;
+    Ok(Some(GeoIpLocation {
+        country,
+        city,
+        latitude,
+        longitude,
+    }))
+}
+
+pub fn validate_location_override(location: &GeoIpLocation) -> Result<(), &'static str> {
+    if sanitize_location_text(Some(location.country.clone()), "location country")?.as_deref()
+        != Some(location.country.as_str())
+    {
+        return Err("location country must not include surrounding whitespace");
+    }
+    if let Some(city) = location.city.as_deref()
+        && sanitize_location_text(Some(city.to_string()), "location city")?.as_deref() != Some(city)
+    {
+        return Err("location city must not include surrounding whitespace");
+    }
+    sanitize_location_coordinates(location.latitude, location.longitude)?;
+    Ok(())
+}
+
+fn sanitize_location_text(
+    value: Option<String>,
+    field: &'static str,
+) -> Result<Option<String>, &'static str> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(None);
+    }
+    if value.len() > MAX_LOCATION_OVERRIDE_TEXT_BYTES {
+        return Err(match field {
+            "location country" => "location country is too long",
+            "location city" => "location city is too long",
+            _ => "location text is too long",
+        });
+    }
+    if value.chars().any(char::is_control) {
+        return Err(match field {
+            "location country" => "location country contains control characters",
+            "location city" => "location city contains control characters",
+            _ => "location text contains control characters",
+        });
+    }
+    Ok(Some(value.to_string()))
+}
+
+fn sanitize_location_coordinates(
+    latitude: Option<f64>,
+    longitude: Option<f64>,
+) -> Result<(Option<f64>, Option<f64>), &'static str> {
+    match (latitude, longitude) {
+        (None, None) => Ok((None, None)),
+        (Some(latitude), Some(longitude)) => {
+            if !latitude.is_finite() || !(-90.0..=90.0).contains(&latitude) {
+                return Err("location latitude must be between -90 and 90");
+            }
+            if !longitude.is_finite() || !(-180.0..=180.0).contains(&longitude) {
+                return Err("location longitude must be between -180 and 180");
+            }
+            Ok((Some(latitude), Some(longitude)))
+        }
+        _ => Err("location latitude and longitude must be set together"),
+    }
 }
 
 fn sanitize_percentage(value: f64, counter: &mut u32) -> f64 {
@@ -304,8 +392,9 @@ mod tests {
 
     use super::{
         MAX_SANITIZED_RATE_BYTES_PER_SEC, MAX_SANITIZED_STRING_BYTES, SanitizationReport,
-        sanitize_disk_usage, sanitize_memory_usage, sanitize_non_negative_f64,
-        sanitize_optional_rate, sanitize_renewal_price, validate_renewal_price,
+        sanitize_disk_usage, sanitize_location_override, sanitize_memory_usage,
+        sanitize_non_negative_f64, sanitize_optional_rate, sanitize_renewal_price,
+        validate_location_override, validate_renewal_price,
     };
 
     #[test]
@@ -321,6 +410,33 @@ mod tests {
         assert!(sanitize_renewal_price(Some("bad\nprice".to_string())).is_err());
         assert!(sanitize_renewal_price(Some("x".repeat(65))).is_err());
         assert!(validate_renewal_price(" $5/mo").is_err());
+    }
+
+    #[test]
+    fn location_override_requires_country_and_valid_coordinates() {
+        let location = sanitize_location_override(
+            Some("  HK  ".to_string()),
+            Some("  Hong Kong  ".to_string()),
+            Some(22.3193),
+            Some(114.1694),
+        )
+        .expect("valid location")
+        .expect("override should be present");
+        assert_eq!(location.country, "HK");
+        assert_eq!(location.city.as_deref(), Some("Hong Kong"));
+        assert_eq!(location.latitude, Some(22.3193));
+        assert_eq!(location.longitude, Some(114.1694));
+        assert!(validate_location_override(&location).is_ok());
+
+        assert!(sanitize_location_override(None, Some("Osaka".to_string()), None, None).is_err());
+        assert!(
+            sanitize_location_override(Some("JP".to_string()), None, Some(34.69), None).is_err()
+        );
+        assert!(
+            sanitize_location_override(Some("JP".to_string()), None, Some(91.0), Some(135.5))
+                .is_err()
+        );
+        assert!(sanitize_location_override(Some("J\nP".to_string()), None, None, None).is_err());
     }
 
     proptest! {

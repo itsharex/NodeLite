@@ -166,7 +166,7 @@ async fn push_incremental_updates(
                 sender,
                 &BrowserMessage::NodeUpsert {
                     generated_at,
-                    node: node.clone(),
+                    node: Box::new(node.clone()),
                 },
             )
             .await?;

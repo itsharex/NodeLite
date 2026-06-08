@@ -31,18 +31,29 @@ pub(super) async fn handle_socket(
     let hello = wait_for_hello_message(&state, client_ip, &mut socket).await?;
     let authorized =
         authorize_hello(&state, client_ip, &mut socket, &hello, audit_user_agent).await?;
-    let identity = authorized.identity;
+    let AuthorizedNode {
+        identity,
+        generation,
+        token_expires_at,
+        registry_revision,
+        location_override,
+    } = authorized;
     let geoip = state.geoip.lookup(client_ip).await;
     let mut session = ActiveSession {
         node_id: identity.node_id.clone(),
         node_label: identity.node_label.clone(),
         session_id: shared
-            .register_node(identity, Some(client_ip.to_string()), geoip)
+            .register_node(
+                identity,
+                Some(client_ip.to_string()),
+                geoip,
+                location_override,
+            )
             .await,
         session_token: hello.token,
-        session_generation: authorized.generation,
-        token_expires_at: authorized.token_expires_at,
-        registry_revision: authorized.registry_revision,
+        session_generation: generation,
+        token_expires_at,
+        registry_revision,
     };
 
     info!(

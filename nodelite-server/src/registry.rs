@@ -26,7 +26,7 @@ use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use nodelite_proto::NodeIdentity;
+use nodelite_proto::{GeoIpLocation, NodeIdentity};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{RwLock, Semaphore};
 
@@ -69,6 +69,7 @@ const INSTALL_TOKEN_TTL_MINUTES: i64 = 15;
 /// CPU/内存峰值钉住,同时让正常重连只承担队列等待。
 const TOKEN_VERIFY_MAX_PARALLELISM: usize = 2;
 const TOKEN_VERIFY_WAIT_WARN_AFTER: Duration = Duration::from_millis(100);
+const LOCATION_COORDINATE_SCALE: f64 = 1_000_000.0;
 
 /// 已登记节点的持久化条目。
 ///
@@ -112,6 +113,15 @@ pub struct RegisteredNode {
     /// 运营侧记录的续费价格,例如 "¥30/月" 或 "$5/mo"。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub renewal_price: Option<String>,
+    /// 手动位置覆盖。设置后 UI 地图与位置文本优先使用这里的值。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location_override_country: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location_override_city: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location_override_latitude_microdegrees: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location_override_longitude_microdegrees: Option<i32>,
 }
 
 fn is_false(value: &bool) -> bool {
@@ -126,6 +136,7 @@ pub struct AuthorizedNode {
     pub generation: u64,
     pub token_expires_at: Option<DateTime<Utc>>,
     pub registry_revision: u64,
+    pub location_override: Option<GeoIpLocation>,
 }
 
 /// 轻量 token 状态快照,供 WebSocket 会话在 registry revision 变化时刷新本地缓存。
@@ -219,4 +230,28 @@ struct RegistryFile {
     nodes: Vec<RegisteredNode>,
     #[serde(default)]
     install_sessions: Vec<InstallSession>,
+}
+
+impl RegisteredNode {
+    pub fn location_override(&self) -> Option<GeoIpLocation> {
+        let country = self.location_override_country.clone()?;
+        Some(GeoIpLocation {
+            country,
+            city: self.location_override_city.clone(),
+            latitude: self
+                .location_override_latitude_microdegrees
+                .map(microdegrees_to_coordinate),
+            longitude: self
+                .location_override_longitude_microdegrees
+                .map(microdegrees_to_coordinate),
+        })
+    }
+}
+
+pub(super) fn coordinate_to_microdegrees(value: f64) -> i32 {
+    (value * LOCATION_COORDINATE_SCALE).round() as i32
+}
+
+fn microdegrees_to_coordinate(value: i32) -> f64 {
+    f64::from(value) / LOCATION_COORDINATE_SCALE
 }

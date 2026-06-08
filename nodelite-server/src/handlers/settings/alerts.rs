@@ -280,6 +280,10 @@ mod tests {
             geoip_city: None,
             geoip_latitude: None,
             geoip_longitude: None,
+            location_override_country: None,
+            location_override_city: None,
+            location_override_latitude: None,
+            location_override_longitude: None,
             latency_ms: Some(latency_ms),
         }
     }

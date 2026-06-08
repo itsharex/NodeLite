@@ -282,7 +282,12 @@ mod tests {
             node_label: authorized.identity.node_label.clone(),
             session_id: state
                 .shared
-                .register_node(authorized.identity, Some("127.0.0.1".to_string()), None)
+                .register_node(
+                    authorized.identity,
+                    Some("127.0.0.1".to_string()),
+                    None,
+                    None,
+                )
                 .await,
             session_token: issued.node_session_token,
             session_generation: authorized.generation,

@@ -6,6 +6,7 @@ import type { NodeListItem } from '@/api';
 import { nodeFlag, nodeStatusKey } from '@/lib/map/projection';
 import { buildSparkline, nodeSparkPoints, sparklineColor } from '@/lib/chart/sparkline';
 import { fmtBytes } from '@/lib/format';
+import { locationFromNode } from '@/lib/nodeMeta';
 import { useNodeHistoryStore } from '@/stores/nodeHistory';
 import { useSettingsStore } from '@/stores/settings';
 
@@ -42,8 +43,7 @@ const latencyText = computed(() =>
 );
 
 const locationText = computed(() => {
-  const parts = [props.node.geoip_city, props.node.geoip_country].filter(Boolean);
-  return parts.length > 0 ? parts.join(' / ') : props.node.identity.hostname;
+  return locationFromNode(props.node)?.replace(', ', ' / ') || props.node.identity.hostname;
 });
 
 const loadText = computed(() => {

@@ -53,6 +53,14 @@ pub(crate) struct SettingsAgentToken {
     pub(crate) service_expires_at: Option<DateTime<Utc>>,
     pub(crate) service_unlimited: bool,
     pub(crate) renewal_price: Option<String>,
+    pub(crate) geoip_country: Option<String>,
+    pub(crate) geoip_city: Option<String>,
+    pub(crate) geoip_latitude: Option<f64>,
+    pub(crate) geoip_longitude: Option<f64>,
+    pub(crate) location_override_country: Option<String>,
+    pub(crate) location_override_city: Option<String>,
+    pub(crate) location_override_latitude: Option<f64>,
+    pub(crate) location_override_longitude: Option<f64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -63,6 +71,18 @@ pub(crate) struct UpdateNodeServiceMetadataRequest {
     pub(crate) service_unlimited: bool,
     #[serde(default)]
     pub(crate) renewal_price: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct UpdateNodeLocationOverrideRequest {
+    #[serde(default)]
+    pub(crate) country: Option<String>,
+    #[serde(default)]
+    pub(crate) city: Option<String>,
+    #[serde(default)]
+    pub(crate) latitude: Option<f64>,
+    #[serde(default)]
+    pub(crate) longitude: Option<f64>,
 }
 
 #[derive(Debug, Deserialize)]

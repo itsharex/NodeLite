@@ -62,6 +62,14 @@ export function makeSettings(overrides: Partial<SettingsResponse> = {}): Setting
         service_expires_at: null,
         service_unlimited: false,
         renewal_price: null,
+        geoip_country: null,
+        geoip_city: null,
+        geoip_latitude: null,
+        geoip_longitude: null,
+        location_override_country: null,
+        location_override_city: null,
+        location_override_latitude: null,
+        location_override_longitude: null,
       },
     ],
   };
@@ -109,6 +117,20 @@ export function makeNode(overrides: Partial<NodeListItem> = {}): NodeListItem {
     geoip_city: 'geoip_city' in overrides ? (overrides.geoip_city ?? null) : null,
     geoip_latitude: 'geoip_latitude' in overrides ? (overrides.geoip_latitude ?? null) : null,
     geoip_longitude: 'geoip_longitude' in overrides ? (overrides.geoip_longitude ?? null) : null,
+    location_override_country:
+      'location_override_country' in overrides
+        ? (overrides.location_override_country ?? null)
+        : null,
+    location_override_city:
+      'location_override_city' in overrides ? (overrides.location_override_city ?? null) : null,
+    location_override_latitude:
+      'location_override_latitude' in overrides
+        ? (overrides.location_override_latitude ?? null)
+        : null,
+    location_override_longitude:
+      'location_override_longitude' in overrides
+        ? (overrides.location_override_longitude ?? null)
+        : null,
     snapshot: 'snapshot' in overrides ? (overrides.snapshot ?? null) : defaultSnapshot,
     latency_ms: 'latency_ms' in overrides ? (overrides.latency_ms ?? null) : 5,
     online: 'online' in overrides ? (overrides.online ?? false) : true,
@@ -135,6 +157,20 @@ export function makeNodeStatus(overrides: Partial<NodeStatus> = {}): NodeStatus 
     geoip_city: 'geoip_city' in overrides ? (overrides.geoip_city ?? null) : null,
     geoip_latitude: 'geoip_latitude' in overrides ? (overrides.geoip_latitude ?? null) : null,
     geoip_longitude: 'geoip_longitude' in overrides ? (overrides.geoip_longitude ?? null) : null,
+    location_override_country:
+      'location_override_country' in overrides
+        ? (overrides.location_override_country ?? null)
+        : null,
+    location_override_city:
+      'location_override_city' in overrides ? (overrides.location_override_city ?? null) : null,
+    location_override_latitude:
+      'location_override_latitude' in overrides
+        ? (overrides.location_override_latitude ?? null)
+        : null,
+    location_override_longitude:
+      'location_override_longitude' in overrides
+        ? (overrides.location_override_longitude ?? null)
+        : null,
     snapshot:
       'snapshot' in overrides
         ? (overrides.snapshot ?? null)

@@ -7,6 +7,7 @@ import { useWorldGeoJson } from '@/composables/useWorldGeoJson';
 import { useTheme } from '@/composables/useTheme';
 import { nodePosition, nodeStatusKey } from '@/lib/map/projection';
 import { drawFallbackMask, drawGeoJsonMask, paintWorldDotMap } from '@/lib/map/landMask';
+import { locationFromNode } from '@/lib/nodeMeta';
 
 const nodesStore = useNodesStore();
 const { geojson, load } = useWorldGeoJson();
@@ -51,13 +52,7 @@ function statusLabelKey(node: NodeListItem): string {
 }
 
 function locationText(node: NodeListItem): string {
-  for (const tag of node.identity.tags || []) {
-    const match = String(tag).match(/^(?:loc|location|region|city)[:=](.+)$/i);
-    if (match?.[1]) return match[1];
-  }
-  if (node.geoip_country === 'LAN') return 'LAN';
-  const geo = [node.geoip_city, node.geoip_country].filter(Boolean);
-  return geo.length > 0 ? geo.join(', ') : node.identity.hostname;
+  return locationFromNode(node) || node.identity.hostname;
 }
 
 function dotColor(): string {

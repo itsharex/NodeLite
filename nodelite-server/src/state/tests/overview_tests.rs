@@ -13,6 +13,7 @@ fn overview_saturates_totals_and_skips_invalid_rates() {
         sample_identity(),
         Some("198.51.100.10".to_string()),
         None,
+        None,
         now,
     );
     registry.register_node(
@@ -23,6 +24,7 @@ fn overview_saturates_totals_and_skips_invalid_rates() {
             ..sample_identity()
         },
         Some("198.51.100.11".to_string()),
+        None,
         None,
         now,
     );
@@ -61,6 +63,7 @@ fn overview_avoids_overflow_when_summing_latency() {
         sample_identity(),
         Some("198.51.100.10".to_string()),
         None,
+        None,
         now,
     );
     registry.register_node(
@@ -71,6 +74,7 @@ fn overview_avoids_overflow_when_summing_latency() {
             ..sample_identity()
         },
         Some("198.51.100.11".to_string()),
+        None,
         None,
         now,
     );
