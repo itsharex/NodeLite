@@ -74,8 +74,8 @@ log_token_events = true
 log_rate_limit = true
 
 [geoip]
-# 自动根据 Agent 连接 IP 推断国家/地区。默认关闭,关闭时行为与旧版本一致。
-enabled = false
+# 自动根据 Agent 连接 IP 推断国家/地区。默认开启;需要完全关闭时改为 false。
+enabled = true
 # provider = "dbip" 会使用 DB-IP Lite; provider = "custom" 时只读取本地 database_path。
 provider = "dbip"
 # country-lite 只提供国家; city-lite 会额外填充 city/latitude/longitude。

@@ -141,7 +141,7 @@ pub(super) fn default_audit_log_rate_limit() -> bool {
 }
 
 pub(super) fn default_geoip_enabled() -> bool {
-    false
+    true
 }
 
 pub(super) fn default_geoip_provider() -> super::GeoIpProvider {
