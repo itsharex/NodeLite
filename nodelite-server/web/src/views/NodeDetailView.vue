@@ -3,10 +3,10 @@ import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import AppLayout from '@/components/AppLayout.vue';
 import NodeHardwarePanel from '@/components/NodeHardwarePanel.vue';
+import NodeNetworkPanel from '@/components/NodeNetworkPanel.vue';
 import NodeOverviewMonitor, {
   type OverviewMonitorMetric,
 } from '@/components/NodeOverviewMonitor.vue';
-import MetricChart from '@/components/MetricChart.vue';
 import ChartModal from '@/components/ChartModal.vue';
 import LogPanel from '@/components/LogPanel.vue';
 import NodeSettingsPanel from '@/components/NodeSettingsPanel.vue';
@@ -14,10 +14,9 @@ import { usePolling } from '@/composables/usePolling';
 import { useChartSelection, type PresetKey } from '@/composables/useChartSelection';
 import { nodeStatusKey } from '@/lib/map/projection';
 import { ipFromNode, locationFromNode } from '@/lib/nodeMeta';
-import { uptimeParts, fmtBytes, fmtRate } from '@/lib/format';
+import { uptimeParts } from '@/lib/format';
 import { buildChartData } from '@/lib/chart/chartData';
 import { loadSeries, networkSeries } from '@/lib/chart/svgModel';
-import { formatChartValue } from '@/lib/chart/format';
 import { useI18n } from 'vue-i18n';
 import { useNodeStatusStore } from '@/stores/nodeStatus';
 import { useDetailHistoryStore } from '@/stores/detailHistory';
@@ -89,26 +88,6 @@ const loadError = computed(() => store.error !== null && store.data === null && 
 const historyNeeded = computed(() => activeTab.value === 'network');
 const monitorNeeded = computed(() => activeTab.value === 'overview');
 const logsNeeded = computed(() => activeTab.value === 'logs');
-
-// Network tab values (legacy renderSummaryCards net block).
-const net = computed(() => {
-  const n = node.value?.snapshot?.network;
-  return {
-    downRate: fmtRate(n?.rx_bytes_per_sec) ?? '—',
-    upRate: fmtRate(n?.tx_bytes_per_sec) ?? '—',
-    downTotal: fmtBytes(n?.total_rx_bytes) ?? '—',
-    upTotal: fmtBytes(n?.total_tx_bytes) ?? '—',
-    latency:
-      node.value?.latency_ms == null ? '—' : formatChartValue(node.value.latency_ms, 'latency'),
-  };
-});
-const netSeries = computed(() =>
-  networkSeries(
-    buildChartData(historyStore.points),
-    t('index.node.download'),
-    t('index.node.upload'),
-  ),
-);
 
 // loadIfStale (not load) so re-entering a tab within the throttle window
 // reuses the cached data, matching legacy fetchOverviewHistory/fetchAgentLogs.
@@ -291,25 +270,7 @@ const modalConfig = computed(() => {
           </template>
 
           <template v-else-if="activeTab === 'network'">
-            <div class="net-stats" data-test="network-pane">
-              <div class="net-stat">
-                <span class="net-stat__label">↓ {{ $t('index.node.download') }}</span>
-                <strong>{{ net.downRate }}</strong>
-                <small>total {{ net.downTotal }}</small>
-              </div>
-              <div class="net-stat">
-                <span class="net-stat__label">↑ {{ $t('index.node.upload') }}</span>
-                <strong>{{ net.upRate }}</strong>
-                <small>total {{ net.upTotal }}</small>
-              </div>
-              <div class="net-stat">
-                <span class="net-stat__label">{{ $t('node.latency_history') }}</span>
-                <strong>{{ net.latency }}</strong>
-              </div>
-            </div>
-            <article class="panel">
-              <MetricChart :series="netSeries" value-kind="rate" :min-value="0" :height="240" />
-            </article>
+            <NodeNetworkPanel :node="node" :history="historyStore.points" />
           </template>
 
           <template v-else-if="activeTab === 'hardware'">
@@ -408,39 +369,6 @@ const modalConfig = computed(() => {
 .tab-button[disabled] {
   opacity: 0.4;
   cursor: not-allowed;
-}
-.panel {
-  background: var(--bg-card);
-  border: 1px solid var(--border-soft);
-  border-radius: 8px;
-  padding: 16px 18px;
-}
-.net-stats {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-  gap: 14px;
-  margin-bottom: 14px;
-}
-.net-stat {
-  background: var(--bg-card);
-  border: 1px solid var(--border-soft);
-  border-radius: 8px;
-  padding: 16px 18px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.net-stat__label {
-  color: var(--text-muted);
-  font-size: 12px;
-}
-.net-stat strong {
-  font-size: 20px;
-  font-variant-numeric: tabular-nums;
-}
-.net-stat small {
-  color: var(--text-muted);
-  font-size: 12px;
 }
 .error-state {
   display: flex;

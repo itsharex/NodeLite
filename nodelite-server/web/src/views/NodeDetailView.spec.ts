@@ -61,6 +61,26 @@ const FAKE_DICT = {
     'node.cpu_usage': 'CPU Usage',
     'node.memory_usage': 'Memory Usage',
     'node.network_traffic': 'Network Traffic',
+    'node.network.live': 'Live',
+    'node.network.quality': 'Quality',
+    'node.network.link_health': 'Link Health',
+    'node.network.packet_loss': 'Packet Loss',
+    'node.network.loss_history': 'Loss History',
+    'node.network.rtt': 'RTT',
+    'node.network.status': 'Status',
+    'node.network.avg_rtt': 'Avg RTT',
+    'node.network.peak_rate': 'Peak Rate',
+    'node.network.samples': 'Samples',
+    'node.network.samples_count': '{count} samples',
+    'node.network.received': 'Received',
+    'node.network.transmitted': 'Transmitted',
+    'node.network.total_traffic': 'Total Traffic',
+    'node.network.active_rate': 'Active Rate',
+    'node.network.totals': 'Totals',
+    'node.network.traffic_mix': 'Traffic Mix',
+    'node.network.total_value': 'Total {value}',
+    'node.network.avg_empty': 'Avg —',
+    'node.network.avg_value': 'Avg {value}',
     'node.latency_history': 'RTT',
     'node.mounted_disks': 'Mounted Disks',
     'node.stats.cpu': 'CPU',
@@ -240,6 +260,7 @@ describe('NodeDetailView', () => {
     await router.replace({ hash: '#network' });
     await flushPromises();
     expect(wrapper.find('[data-test="network-pane"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="network-quality-card"]').exists()).toBe(true);
     expect(mockHistory).toHaveBeenCalledWith(
       'srv-1',
       expect.objectContaining({ windowHours: 336 }),
