@@ -122,13 +122,12 @@ const route = useRoute();
   height: 58px;
   display: block;
   border-radius: 8px;
-  border: 1px solid var(--border-soft);
   overflow: hidden;
-  background-color: var(--bg-card);
+  background-color: transparent;
   background-image: var(--brand-logo);
   background-position: center;
   background-repeat: no-repeat;
-  background-size: contain;
+  background-size: 66px 66px;
   margin-bottom: 8px;
 }
 .nav-button {
