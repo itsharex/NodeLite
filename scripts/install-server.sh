@@ -38,8 +38,10 @@ GEOIP_UPDATE_INTERVAL_DAYS="${NODELITE_GEOIP_UPDATE_INTERVAL_DAYS:-30}"
 TMP_BIN=""
 TMP_SHA256=""
 TMP_HEADERS=""
+TMP_CONFIG=""
 FAILURE_REPORTED=0
 LAST_STEP="startup"
+CONFIG_DEFAULTS_ADDED=0
 
 # 检测当前脚本是否跑在交互式终端中。这里不能主动触碰 `/dev/tty`,
 # 否则像网页触发升级这种无控制终端场景会在探测阶段就被 shell 报错打断。
@@ -69,6 +71,8 @@ cleanup() {
   [ -n "$TMP_BIN" ] && rm -f "$TMP_BIN"
   [ -n "$TMP_SHA256" ] && rm -f "$TMP_SHA256"
   [ -n "$TMP_HEADERS" ] && rm -f "$TMP_HEADERS"
+  [ -n "$TMP_CONFIG" ] && rm -f "$TMP_CONFIG"
+  return 0
 }
 
 mark_step() {
@@ -76,15 +80,16 @@ mark_step() {
 }
 
 on_exit() {
-  status="$?"
+  exit_status="$?"
   cleanup
-  if [ "$status" -ne 0 ] && [ "$FAILURE_REPORTED" -ne 1 ]; then
-    if has_tty && printf '%s\n' "install-server: aborted during $LAST_STEP (exit status $status)" >/dev/tty 2>/dev/null; then
+  if [ "$exit_status" -ne 0 ] && [ "$FAILURE_REPORTED" -ne 1 ]; then
+    if has_tty && printf '%s\n' "install-server: aborted during $LAST_STEP (exit status $exit_status)" >/dev/tty 2>/dev/null; then
       :
     else
-      printf '%s\n' "install-server: aborted during $LAST_STEP (exit status $status)" >&2
+      printf '%s\n' "install-server: aborted during $LAST_STEP (exit status $exit_status)" >&2
     fi
   fi
+  return "$exit_status"
 }
 
 trap on_exit EXIT
@@ -428,6 +433,78 @@ strip_toml_string_quotes() {
   printf '%s' "$value"
 }
 
+toml_has_key() {
+  file="$1"
+  section="$2"
+  key="$3"
+
+  [ -n "$(toml_get_raw "$file" "$section" "$key")" ]
+}
+
+insert_toml_key() {
+  file="$1"
+  section="$2"
+  line="$3"
+  target_section="[$section]"
+  config_dir="${file%/*}"
+  if [ "$config_dir" = "$file" ]; then
+    config_dir="."
+  fi
+
+  TMP_CONFIG="$(mktemp "$config_dir/server.toml.XXXXXX")" \
+    || fail "failed to create temporary server config"
+  if ! awk -v target_section="$target_section" -v new_line="$line" '
+    BEGIN {
+      in_target = 0
+      inserted = 0
+      seen_target = 0
+    }
+    {
+      current = $0
+      sub(/^[[:space:]]+/, "", current)
+      sub(/[[:space:]]+$/, "", current)
+      if (current ~ /^\[/) {
+        if (in_target && !inserted) {
+          print new_line
+          inserted = 1
+        }
+        in_target = (current == target_section)
+        if (in_target) {
+          seen_target = 1
+        }
+      }
+      print
+    }
+    END {
+      if (!inserted) {
+        if (!seen_target) {
+          print ""
+          print target_section
+        }
+        print new_line
+      }
+    }
+  ' "$file" >"$TMP_CONFIG"; then
+    fail "failed to supplement server config"
+  fi
+  cp "$TMP_CONFIG" "$file" || fail "failed to write supplemented server config"
+  rm -f "$TMP_CONFIG"
+  TMP_CONFIG=""
+  CONFIG_DEFAULTS_ADDED=$((CONFIG_DEFAULTS_ADDED + 1))
+}
+
+ensure_toml_default() {
+  file="$1"
+  section="$2"
+  key="$3"
+  line="$4"
+
+  if toml_has_key "$file" "$section" "$key"; then
+    return 0
+  fi
+  insert_toml_key "$file" "$section" "$line"
+}
+
 # 升级 / 迁移时从已有 server.toml 读出默认值,避免重置用户的自定义配置。
 load_existing_server_defaults() {
   config_path="$1"
@@ -492,6 +569,83 @@ load_existing_server_defaults() {
   [ -n "$value" ] && GEOIP_AUTO_UPDATE="$value"
   value="$(trim_whitespace "$(toml_get_raw "$config_path" geoip update_interval_days)")"
   [ -n "$value" ] && GEOIP_UPDATE_INTERVAL_DAYS="$value"
+
+  return 0
+}
+
+complete_server_config_defaults() {
+  config_path="$1"
+  audit_db_path="${DATA_DIR}/audit.sqlite3"
+  geoip_database_path="${GEOIP_DATABASE_PATH:-${DATA_DIR}/geoip/dbip.mmdb}"
+
+  ensure_toml_default "$config_path" server insecure_allow_http "insecure_allow_http = false"
+  ensure_toml_default "$config_path" server trusted_proxies "trusted_proxies = []"
+  ensure_toml_default "$config_path" server node_registry_path "node_registry_path = \"$REGISTRY_PATH\""
+  ensure_toml_default "$config_path" server history_db_path "history_db_path = \"$DATA_DIR/history.sqlite3\""
+  ensure_toml_default "$config_path" server snapshot_path "snapshot_path = \"$DATA_DIR/snapshot.json\""
+  ensure_toml_default "$config_path" server stale_after_secs "stale_after_secs = $SERVER_STALE_AFTER_SECS"
+  ensure_toml_default "$config_path" server ping_interval_secs "ping_interval_secs = $SERVER_PING_INTERVAL_SECS"
+  ensure_toml_default "$config_path" server max_message_bytes "max_message_bytes = $SERVER_MAX_MESSAGE_BYTES"
+  ensure_toml_default "$config_path" server hello_timeout_secs "hello_timeout_secs = $SERVER_HELLO_TIMEOUT_SECS"
+  ensure_toml_default "$config_path" server max_outstanding_pings "max_outstanding_pings = $SERVER_MAX_OUTSTANDING_PINGS"
+  ensure_toml_default "$config_path" server insecure_transport_warn_interval_secs "insecure_transport_warn_interval_secs = $SERVER_INSECURE_TRANSPORT_WARN_INTERVAL_SECS"
+  ensure_toml_default "$config_path" server max_sanitized_disks "max_sanitized_disks = $SERVER_MAX_SANITIZED_DISKS"
+  ensure_toml_default "$config_path" server max_sanitized_string_bytes "max_sanitized_string_bytes = $SERVER_MAX_SANITIZED_STRING_BYTES"
+  ensure_toml_default "$config_path" server metric_anomaly_session_limit "metric_anomaly_session_limit = $SERVER_METRIC_ANOMALY_SESSION_LIMIT"
+  ensure_toml_default "$config_path" server sqlite_busy_timeout_secs "sqlite_busy_timeout_secs = $SERVER_SQLITE_BUSY_TIMEOUT_SECS"
+
+  ensure_toml_default "$config_path" auth enable_2fa "enable_2fa = false"
+
+  ensure_toml_default "$config_path" metrics export_node_resource_metrics "export_node_resource_metrics = $METRICS_EXPORT_NODE_RESOURCE_METRICS"
+  ensure_toml_default "$config_path" metrics export_node_disk_metrics "export_node_disk_metrics = $METRICS_EXPORT_NODE_DISK_METRICS"
+
+  ensure_toml_default "$config_path" audit enabled "enabled = $AUDIT_ENABLED"
+  ensure_toml_default "$config_path" audit db_path "db_path = \"$audit_db_path\""
+  ensure_toml_default "$config_path" audit retention_days "retention_days = $AUDIT_RETENTION_DAYS"
+  ensure_toml_default "$config_path" audit log_successful_auth "log_successful_auth = $AUDIT_LOG_SUCCESSFUL_AUTH"
+  ensure_toml_default "$config_path" audit log_failed_auth "log_failed_auth = $AUDIT_LOG_FAILED_AUTH"
+  ensure_toml_default "$config_path" audit log_token_events "log_token_events = $AUDIT_LOG_TOKEN_EVENTS"
+  ensure_toml_default "$config_path" audit log_rate_limit "log_rate_limit = $AUDIT_LOG_RATE_LIMIT"
+
+  ensure_toml_default "$config_path" ws max_total_connections "max_total_connections = $WS_MAX_TOTAL_CONNECTIONS"
+  ensure_toml_default "$config_path" ws max_connections_per_ip "max_connections_per_ip = $WS_MAX_CONNECTIONS_PER_IP"
+  ensure_toml_default "$config_path" ws auth_fail_window_secs "auth_fail_window_secs = $WS_AUTH_FAIL_WINDOW_SECS"
+  ensure_toml_default "$config_path" ws auth_fail_max_attempts "auth_fail_max_attempts = $WS_AUTH_FAIL_MAX_ATTEMPTS"
+  ensure_toml_default "$config_path" ws auth_block_secs "auth_block_secs = $WS_AUTH_BLOCK_SECS"
+
+  ensure_toml_default "$config_path" ui refresh_interval_secs "refresh_interval_secs = $UI_REFRESH_INTERVAL_SECS"
+
+  ensure_toml_default "$config_path" geoip enabled "enabled = $GEOIP_ENABLED"
+  ensure_toml_default "$config_path" geoip provider "provider = \"$GEOIP_PROVIDER\""
+  ensure_toml_default "$config_path" geoip edition "edition = \"$GEOIP_EDITION\""
+  ensure_toml_default "$config_path" geoip database_path "database_path = \"$geoip_database_path\""
+  ensure_toml_default "$config_path" geoip auto_update "auto_update = $GEOIP_AUTO_UPDATE"
+  ensure_toml_default "$config_path" geoip update_interval_days "update_interval_days = $GEOIP_UPDATE_INTERVAL_DAYS"
+
+  ensure_toml_default "$config_path" filters ignored_filesystems "ignored_filesystems = $IGNORED_FILESYSTEMS_RAW"
+
+  ensure_toml_default "$config_path" alerts enabled "enabled = $ALERTS_ENABLED"
+  ensure_toml_default "$config_path" alerts.smtp enabled "enabled = $ALERTS_SMTP_ENABLED"
+  ensure_toml_default "$config_path" alerts.smtp host "host = \"\""
+  ensure_toml_default "$config_path" alerts.smtp port "port = $ALERTS_SMTP_PORT"
+  ensure_toml_default "$config_path" alerts.smtp username "username = \"\""
+  ensure_toml_default "$config_path" alerts.smtp sender "sender = \"\""
+  ensure_toml_default "$config_path" alerts.smtp recipients "recipients = []"
+  ensure_toml_default "$config_path" alerts.smtp transport "transport = \"$ALERTS_SMTP_TRANSPORT\""
+  ensure_toml_default "$config_path" alerts.smtp send_resolved "send_resolved = $ALERTS_SMTP_SEND_RESOLVED"
+  ensure_toml_default "$config_path" alerts.webhook enabled "enabled = $ALERTS_WEBHOOK_ENABLED"
+  ensure_toml_default "$config_path" alerts.webhook url "url = \"\""
+  ensure_toml_default "$config_path" alerts.webhook send_resolved "send_resolved = $ALERTS_WEBHOOK_SEND_RESOLVED"
+  ensure_toml_default "$config_path" alerts.inspection enabled "enabled = $ALERTS_INSPECTION_ENABLED"
+  ensure_toml_default "$config_path" alerts.inspection local_time "local_time = \"$ALERTS_INSPECTION_LOCAL_TIME\""
+  ensure_toml_default "$config_path" alerts.inspection lookback_hours "lookback_hours = $ALERTS_INSPECTION_LOOKBACK_HOURS"
+  ensure_toml_default "$config_path" alerts.inspection delivery "delivery = $ALERTS_INSPECTION_DELIVERY"
+  ensure_toml_default "$config_path" alerts.inspection offline_grace_minutes "offline_grace_minutes = $ALERTS_INSPECTION_OFFLINE_GRACE_MINUTES"
+  ensure_toml_default "$config_path" alerts.inspection latency_warn_ms "latency_warn_ms = $ALERTS_INSPECTION_LATENCY_WARN_MS"
+  ensure_toml_default "$config_path" alerts.inspection cpu_warn_percent "cpu_warn_percent = $ALERTS_INSPECTION_CPU_WARN_PERCENT"
+  ensure_toml_default "$config_path" alerts.inspection memory_warn_percent "memory_warn_percent = $ALERTS_INSPECTION_MEMORY_WARN_PERCENT"
+
+  chmod 0600 "$config_path"
 }
 
 # 把交互或默认得到的变量拼成最终 server.toml 文本。
@@ -625,13 +779,43 @@ fi
 SERVER_STALE_AFTER_SECS="20"
 SERVER_PING_INTERVAL_SECS="10"
 SERVER_MAX_MESSAGE_BYTES="65536"
+SERVER_HELLO_TIMEOUT_SECS="10"
+SERVER_MAX_OUTSTANDING_PINGS="32"
+SERVER_INSECURE_TRANSPORT_WARN_INTERVAL_SECS="900"
+SERVER_MAX_SANITIZED_DISKS="64"
+SERVER_MAX_SANITIZED_STRING_BYTES="256"
+SERVER_METRIC_ANOMALY_SESSION_LIMIT="5"
+SERVER_SQLITE_BUSY_TIMEOUT_SECS="5"
 WS_MAX_TOTAL_CONNECTIONS="1024"
 WS_MAX_CONNECTIONS_PER_IP="32"
 WS_AUTH_FAIL_WINDOW_SECS="300"
 WS_AUTH_FAIL_MAX_ATTEMPTS="12"
 WS_AUTH_BLOCK_SECS="900"
+METRICS_EXPORT_NODE_RESOURCE_METRICS="false"
+METRICS_EXPORT_NODE_DISK_METRICS="false"
+AUDIT_ENABLED="true"
+AUDIT_RETENTION_DAYS="90"
+AUDIT_LOG_SUCCESSFUL_AUTH="true"
+AUDIT_LOG_FAILED_AUTH="true"
+AUDIT_LOG_TOKEN_EVENTS="true"
+AUDIT_LOG_RATE_LIMIT="true"
 UI_REFRESH_INTERVAL_SECS="5"
 IGNORED_FILESYSTEMS_RAW='["tmpfs", "devtmpfs", "overlay"]'
+ALERTS_ENABLED="false"
+ALERTS_SMTP_ENABLED="false"
+ALERTS_SMTP_PORT="587"
+ALERTS_SMTP_TRANSPORT="start_tls"
+ALERTS_SMTP_SEND_RESOLVED="true"
+ALERTS_WEBHOOK_ENABLED="false"
+ALERTS_WEBHOOK_SEND_RESOLVED="true"
+ALERTS_INSPECTION_ENABLED="false"
+ALERTS_INSPECTION_LOCAL_TIME="09:00"
+ALERTS_INSPECTION_LOOKBACK_HOURS="24"
+ALERTS_INSPECTION_DELIVERY='["smtp"]'
+ALERTS_INSPECTION_OFFLINE_GRACE_MINUTES="10"
+ALERTS_INSPECTION_LATENCY_WARN_MS="250"
+ALERTS_INSPECTION_CPU_WARN_PERCENT="85"
+ALERTS_INSPECTION_MEMORY_WARN_PERCENT="90"
 
 LISTEN_HOST_DEFAULT_VALUE="$LISTEN_HOST_DEFAULT"
 LISTEN_PORT_DEFAULT_VALUE="20000"
@@ -687,6 +871,16 @@ else
   validate_no_whitespace "public host" "$PUBLIC_HOST"
 fi
 
+if [ "$MODE" = "upgrade" ]; then
+  mark_step "supplementing server config defaults"
+  complete_server_config_defaults "$CONFIG_PATH"
+  if [ "$CONFIG_DEFAULTS_ADDED" -gt 0 ]; then
+    tty_println "Supplemented server config defaults: $CONFIG_DEFAULTS_ADDED missing setting(s)"
+  else
+    tty_println "Server config already contains current default fields"
+  fi
+fi
+
 mark_step "checking target architecture"
 ARCH="$(uname -m)"
 case "$ARCH" in
@@ -709,6 +903,17 @@ mkdir -p "$INSTALL_ROOT" "$CONFIG_DIR" "$DATA_DIR"
 chown root:root "$INSTALL_ROOT" "$CONFIG_DIR" "$DATA_DIR"
 chmod 0755 "$INSTALL_ROOT"
 chmod 0700 "$CONFIG_DIR" "$DATA_DIR"
+
+if [ "$MODE" != "upgrade" ]; then
+  mark_step "writing server config"
+  render_server_config >"$CONFIG_PATH"
+  chmod 0600 "$CONFIG_PATH"
+  mark_step "supplementing server config defaults"
+  complete_server_config_defaults "$CONFIG_PATH"
+  if [ "$CONFIG_DEFAULTS_ADDED" -gt 0 ]; then
+    tty_println "Supplemented server config defaults: $CONFIG_DEFAULTS_ADDED missing setting(s)"
+  fi
+fi
 
 mark_step "creating temporary files"
 TMP_BIN="$(mktemp "$INSTALL_ROOT/nodelite-server.XXXXXX")"
@@ -736,10 +941,6 @@ if [ "$MODE" = "migrate" ] && [ "$CURRENT_INSTALL_ROOT" != "$INSTALL_ROOT" ]; th
 fi
 
 if [ "$MODE" != "upgrade" ]; then
-  mark_step "writing server config"
-  render_server_config >"$CONFIG_PATH"
-  chmod 0600 "$CONFIG_PATH"
-
   if [ ! -f "$REGISTRY_PATH" ]; then
     printf '%s\n' '{"nodes":[],"install_sessions":[]}' >"$REGISTRY_PATH"
   fi
@@ -805,6 +1006,9 @@ tty_println "Config: $CONFIG_PATH"
 tty_println "Registry: $REGISTRY_PATH"
 if [ "$MODE" = "upgrade" ]; then
   tty_println "Config preserved: existing server.toml and readonly credentials were kept."
+  if [ "$CONFIG_DEFAULTS_ADDED" -gt 0 ]; then
+    tty_println "Config supplemented: added $CONFIG_DEFAULTS_ADDED missing default setting(s)."
+  fi
 else
   tty_println "Readonly username: $READONLY_USERNAME"
   tty_println "Readonly password: $READONLY_PASSWORD"
