@@ -35,7 +35,18 @@
   --chart-network-down: #22c55e;
   --chart-network-up: #a855f7;
   --chart-latency: #eab308;
-  font-family: 'Inter', 'PingFang SC', 'Helvetica Neue', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --chart-load-one: #f4f4f5;
+  --chart-load-five: #a1a1aa;
+  --chart-load-fifteen: #71717a;
+  --chart-disk: #14b8a6;
+  font-family:
+    'Inter',
+    'PingFang SC',
+    'Helvetica Neue',
+    'Segoe UI',
+    system-ui,
+    -apple-system,
+    sans-serif;
 }
 
 :root[data-theme='light'] {
@@ -58,6 +69,9 @@
   --accent-red-soft: rgba(239, 68, 68, 0.16);
   --map-land-dot: rgba(71, 85, 105, 0.56);
   --map-land-stroke: rgba(15, 23, 42, 0.22);
+  --chart-load-one: #18181b;
+  --chart-load-five: #52525b;
+  --chart-load-fifteen: #a1a1aa;
 }
 
 * {

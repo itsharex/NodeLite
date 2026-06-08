@@ -96,6 +96,15 @@ export function networkSeries(
   ];
 }
 
+/** Load average series for 1/5/15 minute windows. */
+export function loadSeries(data: ChartData): MultiSeriesInput[] {
+  return [
+    { label: '1m', color: 'var(--chart-load-one)', points: data.loadOnePts },
+    { label: '5m', color: 'var(--chart-load-five)', points: data.loadFivePts },
+    { label: '15m', color: 'var(--chart-load-fifteen)', points: data.loadFifteenPts },
+  ];
+}
+
 function isFiniteValue(p: ChartPoint): p is ChartPoint & { value: number } {
   return p.value != null && Number.isFinite(Number(p.value));
 }
@@ -106,7 +115,10 @@ function buildGrid(bounds: ChartBounds, height: number, kind: ChartValueKind): C
   const ratios = height < 100 ? [0, 0.5, 1] : [0, 0.25, 0.5, 0.75, 1];
   return ratios.map((ratio) => {
     const tick = bounds.displayMin + (bounds.displayMax - bounds.displayMin) * ratio;
-    return { y: chartY(tick, bounds, height, PAD_TOP, PAD_BOTTOM), label: formatChartValue(tick, kind) };
+    return {
+      y: chartY(tick, bounds, height, PAD_TOP, PAD_BOTTOM),
+      label: formatChartValue(tick, kind),
+    };
   });
 }
 

@@ -131,6 +131,7 @@ export interface AggregatedPoint {
   rx_bytes_per_sec: number | null;
   tx_bytes_per_sec: number | null;
   latency_ms: number | null;
+  disk_used_percent: number | null;
 }
 
 /**
@@ -155,6 +156,7 @@ export function aggregateHistory(
       rx: Acc;
       tx: Acc;
       latency: Acc;
+      disk: Acc;
     }
   >();
   for (const point of history) {
@@ -171,6 +173,7 @@ export function aggregateHistory(
       rx: { sum: 0, count: 0 },
       tx: { sum: 0, count: 0 },
       latency: { sum: 0, count: 0 },
+      disk: { sum: 0, count: 0 },
     };
     add(item.cpu, point.cpu_usage_percent);
     add(item.loadOne, point.load_one);
@@ -180,6 +183,7 @@ export function aggregateHistory(
     add(item.rx, point.rx_bytes_per_sec);
     add(item.tx, point.tx_bytes_per_sec);
     add(item.latency, point.latency_ms);
+    add(item.disk, point.disk_used_percent);
     buckets.set(bucket, item);
   }
   return [...buckets.values()]
@@ -195,6 +199,7 @@ export function aggregateHistory(
       rx_bytes_per_sec: avg(item.rx),
       tx_bytes_per_sec: avg(item.tx),
       latency_ms: avg(item.latency),
+      disk_used_percent: avg(item.disk),
     }));
 }
 
@@ -220,6 +225,7 @@ export interface ChartData {
   dlPts: ChartPoint[];
   upPts: ChartPoint[];
   rttPts: ChartPoint[];
+  diskPts: ChartPoint[];
 }
 
 export function buildChartData(
@@ -237,5 +243,6 @@ export function buildChartData(
     dlPts: chartPoints(chartHistory, 'rx_bytes_per_sec'),
     upPts: chartPoints(chartHistory, 'tx_bytes_per_sec'),
     rttPts: chartPoints(chartHistory, 'latency_ms'),
+    diskPts: chartPoints(chartHistory, 'disk_used_percent'),
   };
 }

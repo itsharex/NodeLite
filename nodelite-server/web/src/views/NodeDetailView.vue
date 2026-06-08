@@ -3,11 +3,11 @@ import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import AppLayout from '@/components/AppLayout.vue';
 import NodeInfoPanel from '@/components/NodeInfoPanel.vue';
-import NodeSummaryCards from '@/components/NodeSummaryCards.vue';
-import OverviewCharts from '@/components/OverviewCharts.vue';
+import NodeOverviewMonitor, {
+  type OverviewMonitorMetric,
+} from '@/components/NodeOverviewMonitor.vue';
 import NodeDisks from '@/components/NodeDisks.vue';
 import MetricChart from '@/components/MetricChart.vue';
-import MonitorCharts, { type MonitorMetric } from '@/components/MonitorCharts.vue';
 import ChartModal from '@/components/ChartModal.vue';
 import LogPanel from '@/components/LogPanel.vue';
 import NodeSettingsPanel from '@/components/NodeSettingsPanel.vue';
@@ -17,7 +17,7 @@ import { nodeStatusKey } from '@/lib/map/projection';
 import { ipFromNode, locationFromNode } from '@/lib/nodeMeta';
 import { uptimeParts, fmtBytes, fmtRate } from '@/lib/format';
 import { buildChartData } from '@/lib/chart/chartData';
-import { networkSeries } from '@/lib/chart/svgModel';
+import { loadSeries, networkSeries } from '@/lib/chart/svgModel';
 import { formatChartValue } from '@/lib/chart/format';
 import { useI18n } from 'vue-i18n';
 import { useNodeStatusStore } from '@/stores/nodeStatus';
@@ -28,7 +28,7 @@ import { ApiError } from '@/api/client';
 
 const NODE_DETAIL_REFRESH_MS = 5000;
 
-const TABS = ['overview', 'monitor', 'network', 'hardware', 'logs', 'settings'] as const;
+const TABS = ['overview', 'network', 'hardware', 'logs', 'settings'] as const;
 type TabId = (typeof TABS)[number];
 
 function isTabId(value: string): value is TabId {
@@ -47,8 +47,8 @@ const selection = useChartSelection();
 const nodeId = computed(() => String(route.params.id ?? ''));
 const node = computed(() => store.data);
 
-// Active tab is driven by the URL hash (e.g. /nodes/x#monitor), matching the
-// legacy hash sync; falls back to overview.
+// Active tab is driven by the URL hash and falls back to overview for old
+// hashes such as #monitor.
 const activeTab = computed<TabId>(() => {
   const hash = route.hash.replace(/^#/, '');
   return isTabId(hash) ? hash : 'overview';
@@ -84,15 +84,11 @@ const notFound = computed(
   () => store.error instanceof ApiError && store.error.status === 404 && store.data === null,
 );
 // Generic error state for non-404 failures (network, 500, etc).
-const loadError = computed(
-  () => store.error !== null && store.data === null && !notFound.value,
-);
+const loadError = computed(() => store.error !== null && store.data === null && !notFound.value);
 
-// Tabs that render the overview-history charts (overview/network).
-const historyNeeded = computed(
-  () => activeTab.value === 'overview' || activeTab.value === 'network',
-);
-const monitorNeeded = computed(() => activeTab.value === 'monitor');
+// Network keeps the long history window; overview uses high-res monitor history.
+const historyNeeded = computed(() => activeTab.value === 'network');
+const monitorNeeded = computed(() => activeTab.value === 'overview');
 const logsNeeded = computed(() => activeTab.value === 'logs');
 
 // Network tab values (legacy renderSummaryCards net block).
@@ -103,11 +99,16 @@ const net = computed(() => {
     upRate: fmtRate(n?.tx_bytes_per_sec) ?? '—',
     downTotal: fmtBytes(n?.total_rx_bytes) ?? '—',
     upTotal: fmtBytes(n?.total_tx_bytes) ?? '—',
-    latency: node.value?.latency_ms == null ? '—' : formatChartValue(node.value.latency_ms, 'latency'),
+    latency:
+      node.value?.latency_ms == null ? '—' : formatChartValue(node.value.latency_ms, 'latency'),
   };
 });
 const netSeries = computed(() =>
-  networkSeries(buildChartData(historyStore.points), t('index.node.download'), t('index.node.upload')),
+  networkSeries(
+    buildChartData(historyStore.points),
+    t('index.node.download'),
+    t('index.node.upload'),
+  ),
 );
 
 // loadIfStale (not load) so re-entering a tab within the throttle window
@@ -144,9 +145,9 @@ usePolling(() => {
 }, NODE_DETAIL_REFRESH_MS);
 
 // --- Monitor zoom modal ---
-const modalMetric = ref<MonitorMetric | null>(null);
+const modalMetric = ref<OverviewMonitorMetric | null>(null);
 const modalClipSpikes = ref(true);
-function openZoom(metric: MonitorMetric, clipSpikes = true): void {
+function openZoom(metric: OverviewMonitorMetric, clipSpikes = true): void {
   modalMetric.value = metric;
   modalClipSpikes.value = clipSpikes;
 }
@@ -176,6 +177,22 @@ const modalConfig = computed(() => {
         points: data.memPts,
         valueKind: 'percent' as const,
         color: 'var(--chart-memory)',
+        maxValue: 100,
+        clipSpikes: modalClipSpikes.value,
+      };
+    case 'load':
+      return {
+        title: t('node.load'),
+        series: loadSeries(data),
+        valueKind: 'number' as const,
+        clipSpikes: modalClipSpikes.value,
+      };
+    case 'disk':
+      return {
+        title: t('node.disk_usage'),
+        points: data.diskPts,
+        valueKind: 'percent' as const,
+        color: 'var(--chart-disk)',
         maxValue: 100,
         clipSpikes: modalClipSpikes.value,
       };
@@ -209,10 +226,16 @@ const modalConfig = computed(() => {
           {{ $t(statusLabelKey) }}
         </span>
         <div class="node-title__meta" data-test="node-meta">
-          <span v-if="ip">{{ $t('node.meta.ip', { ip }) }}<template v-if="isLan"> (LAN)</template></span>
+          <span v-if="ip"
+            >{{ $t('node.meta.ip', { ip }) }}<template v-if="isLan"> (LAN)</template></span
+          >
           <span v-if="location && !isLan">{{ location }}</span>
-          <span v-if="uptime && uptime.days > 0">{{ $t('node.meta.uptime_days', { days: uptime.days }) }}</span>
-          <span v-else-if="uptime">{{ $t('node.meta.uptime_hours', { hours: uptime.hours }) }}</span>
+          <span v-if="uptime && uptime.days > 0">{{
+            $t('node.meta.uptime_days', { days: uptime.days })
+          }}</span>
+          <span v-else-if="uptime">{{
+            $t('node.meta.uptime_hours', { hours: uptime.hours })
+          }}</span>
         </div>
       </div>
     </template>
@@ -258,62 +281,55 @@ const modalConfig = computed(() => {
         </nav>
 
         <section class="tab-pane" :data-pane="activeTab" data-test="node-tab-pane">
-        <template v-if="activeTab === 'overview'">
-          <div class="overview-grid">
-            <NodeInfoPanel :node="node" />
-            <NodeSummaryCards :node="node" />
-          </div>
-          <OverviewCharts :node="node" :history="historyStore.points" />
-        </template>
+          <template v-if="activeTab === 'overview'">
+            <NodeOverviewMonitor
+              :node="node"
+              :history="monitorStore.points"
+              :active-key="selection.activeKey.value"
+              @select-preset="onSelectPreset"
+              @zoom="openZoom"
+            />
+          </template>
 
-        <template v-else-if="activeTab === 'network'">
-          <div class="net-stats" data-test="network-pane">
-            <div class="net-stat">
-              <span class="net-stat__label">↓ {{ $t('index.node.download') }}</span>
-              <strong>{{ net.downRate }}</strong>
-              <small>total {{ net.downTotal }}</small>
+          <template v-else-if="activeTab === 'network'">
+            <div class="net-stats" data-test="network-pane">
+              <div class="net-stat">
+                <span class="net-stat__label">↓ {{ $t('index.node.download') }}</span>
+                <strong>{{ net.downRate }}</strong>
+                <small>total {{ net.downTotal }}</small>
+              </div>
+              <div class="net-stat">
+                <span class="net-stat__label">↑ {{ $t('index.node.upload') }}</span>
+                <strong>{{ net.upRate }}</strong>
+                <small>total {{ net.upTotal }}</small>
+              </div>
+              <div class="net-stat">
+                <span class="net-stat__label">{{ $t('node.latency_history') }}</span>
+                <strong>{{ net.latency }}</strong>
+              </div>
             </div>
-            <div class="net-stat">
-              <span class="net-stat__label">↑ {{ $t('index.node.upload') }}</span>
-              <strong>{{ net.upRate }}</strong>
-              <small>total {{ net.upTotal }}</small>
+            <article class="panel">
+              <MetricChart :series="netSeries" value-kind="rate" :min-value="0" :height="240" />
+            </article>
+          </template>
+
+          <template v-else-if="activeTab === 'hardware'">
+            <div class="overview-grid">
+              <NodeInfoPanel :node="node" />
             </div>
-            <div class="net-stat">
-              <span class="net-stat__label">{{ $t('node.latency_history') }}</span>
-              <strong>{{ net.latency }}</strong>
-            </div>
-          </div>
-          <article class="panel">
-            <MetricChart :series="netSeries" value-kind="rate" :min-value="0" :height="240" />
-          </article>
-        </template>
+            <article class="panel">
+              <NodeDisks :node="node" />
+            </article>
+          </template>
 
-        <template v-else-if="activeTab === 'hardware'">
-          <div class="overview-grid">
-            <NodeInfoPanel :node="node" />
-          </div>
-          <article class="panel">
-            <NodeDisks :node="node" />
-          </article>
-        </template>
+          <LogPanel
+            v-else-if="activeTab === 'logs'"
+            :entries="logsStore.entries"
+            :error="logsStore.error"
+          />
 
-        <MonitorCharts
-          v-else-if="activeTab === 'monitor'"
-          :node="node"
-          :history="monitorStore.points"
-          :active-key="selection.activeKey.value"
-          @select-preset="onSelectPreset"
-          @zoom="openZoom"
-        />
-
-        <LogPanel
-          v-else-if="activeTab === 'logs'"
-          :entries="logsStore.entries"
-          :error="logsStore.error"
-        />
-
-        <NodeSettingsPanel v-else-if="activeTab === 'settings'" :node-id="nodeId" />
-      </section>
+          <NodeSettingsPanel v-else-if="activeTab === 'settings'" :node-id="nodeId" />
+        </section>
       </template>
     </div>
 
@@ -332,7 +348,7 @@ const modalConfig = computed(() => {
   margin: 0;
   font-size: 24px;
   font-weight: 600;
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
 }
 .node-title__meta {
   display: flex;
@@ -392,8 +408,8 @@ const modalConfig = computed(() => {
   color: var(--text-secondary);
 }
 .tab-button.active {
-  color: var(--accent-blue);
-  border-bottom-color: var(--accent-blue);
+  color: var(--text-primary);
+  border-bottom-color: var(--text-primary);
 }
 .tab-button[disabled] {
   opacity: 0.4;
@@ -405,7 +421,7 @@ const modalConfig = computed(() => {
 }
 .overview-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: 14px;
   margin-bottom: 14px;
   align-items: start;
@@ -413,7 +429,7 @@ const modalConfig = computed(() => {
 .panel {
   background: var(--bg-card);
   border: 1px solid var(--border-soft);
-  border-radius: 16px;
+  border-radius: 8px;
   padding: 16px 18px;
 }
 .net-stats {
@@ -425,7 +441,7 @@ const modalConfig = computed(() => {
 .net-stat {
   background: var(--bg-card);
   border: 1px solid var(--border-soft);
-  border-radius: 16px;
+  border-radius: 8px;
   padding: 16px 18px;
   display: flex;
   flex-direction: column;

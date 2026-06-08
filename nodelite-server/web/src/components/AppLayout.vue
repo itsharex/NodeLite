@@ -147,6 +147,9 @@ const localeLabels: Record<SupportedLocale, string> = {
   gap: 24px;
   margin-bottom: 22px;
 }
+.page-title {
+  min-width: 0;
+}
 .page-actions {
   display: flex;
   align-items: center;
@@ -191,5 +194,19 @@ const localeLabels: Record<SupportedLocale, string> = {
 }
 .geoip-attribution a {
   color: inherit;
+}
+
+@media (max-width: 700px) {
+  .main {
+    padding: 18px 12px 32px;
+  }
+  .page-header {
+    flex-direction: column;
+    gap: 12px;
+  }
+  .page-actions {
+    align-self: stretch;
+    justify-content: flex-start;
+  }
 }
 </style>
