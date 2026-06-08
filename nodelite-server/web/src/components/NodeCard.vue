@@ -1,14 +1,22 @@
 <script setup lang="ts">
-import { computed, watch } from 'vue';
+import { computed, ref, watch } from 'vue';
+import { useI18n } from 'vue-i18n';
+import { storeToRefs } from 'pinia';
 import type { NodeListItem } from '@/api';
 import { nodeFlag, nodeStatusKey } from '@/lib/map/projection';
 import { buildSparkline, nodeSparkPoints, sparklineColor } from '@/lib/chart/sparkline';
 import { fmtBytes } from '@/lib/format';
 import { useNodeHistoryStore } from '@/stores/nodeHistory';
+import { useSettingsStore } from '@/stores/settings';
 
 const props = defineProps<{ node: NodeListItem }>();
 
 const historyStore = useNodeHistoryStore();
+const settingsStore = useSettingsStore();
+const { entries: historyEntries } = storeToRefs(historyStore);
+const { t, locale } = useI18n();
+const liveLoadPoints = ref<number[]>([]);
+const LIVE_SPARK_MAX_POINTS = 36;
 
 const nodeId = computed(() => props.node.identity.node_id);
 const status = computed(() => nodeStatusKey(props.node));
@@ -76,14 +84,57 @@ const memory = computed(() => {
 });
 
 const sparkColor = computed(() => sparklineColor(status.value));
-const sparkPoints = computed(() =>
-  nodeSparkPoints(historyStore.points(nodeId.value), props.node.snapshot?.load.one),
-);
+const historyPoints = computed(() => historyEntries.value[nodeId.value]?.points ?? []);
+const historySparkPoints = computed(() => nodeSparkPoints(historyPoints.value));
+const sparkPoints = computed(() => {
+  const current = props.node.snapshot?.load.one;
+  const currentValue = Number(current);
+  const hasCurrent = Number.isFinite(currentValue);
+  const history = historySparkPoints.value;
+  if (history.length >= 2) {
+    if (hasCurrent && history[history.length - 1] !== currentValue) {
+      return [...history, currentValue];
+    }
+    return history;
+  }
+  if (history.length === 1 && hasCurrent && history[0] !== currentValue) {
+    return [...history, currentValue];
+  }
+  if (liveLoadPoints.value.length >= 2) return liveLoadPoints.value;
+  return nodeSparkPoints(historyPoints.value, current);
+});
 const spark = computed(() => buildSparkline(sparkPoints.value));
+const serviceMeta = computed(() =>
+  settingsStore.data?.agents.find((agent) => agent.node_id === nodeId.value),
+);
+const serviceExpiryText = computed(() => {
+  const meta = serviceMeta.value;
+  if (!meta) return '—';
+  if (meta.service_unlimited) return t('index.node.service_unlimited');
+  if (!meta.service_expires_at) return '—';
+  const ms = Date.parse(meta.service_expires_at);
+  return Number.isFinite(ms)
+    ? new Date(ms).toLocaleDateString(locale.value, {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+      })
+    : meta.service_expires_at;
+});
+const renewalPriceText = computed(() => {
+  const meta = serviceMeta.value;
+  if (!meta) return '—';
+  return meta.renewal_price || (meta.service_unlimited ? t('index.node.self_owned') : '—');
+});
 
 function clampPercent(value: number | null): number {
   if (value == null || !Number.isFinite(value)) return 0;
   return Math.max(2, Math.min(100, value));
+}
+
+function recordLiveLoad(value: number | null | undefined): void {
+  if (value == null || !Number.isFinite(Number(value))) return;
+  liveLoadPoints.value = [...liveLoadPoints.value, Number(value)].slice(-LIVE_SPARK_MAX_POINTS);
 }
 
 // Re-request on every snapshot change (the 5s poll replaces node objects),
@@ -92,7 +143,10 @@ function clampPercent(value: number | null): number {
 // fire only once and freeze the sparkline.
 watch(
   () => props.node.snapshot,
-  () => void historyStore.loadIfStale(nodeId.value),
+  (snapshot) => {
+    recordLiveLoad(snapshot?.load.one);
+    void historyStore.loadIfStale(nodeId.value);
+  },
   {
     immediate: true,
   },
@@ -156,6 +210,17 @@ watch(
       </div>
     </div>
 
+    <div class="service-row">
+      <div class="service-item">
+        <span>{{ $t('index.node.service_expiry') }}</span>
+        <strong data-test="node-service-expiry">{{ serviceExpiryText }}</strong>
+      </div>
+      <div class="service-item right">
+        <span>{{ $t('index.node.renewal_price') }}</span>
+        <strong data-test="node-renewal-price">{{ renewalPriceText }}</strong>
+      </div>
+    </div>
+
     <div class="node-spark" :style="{ color: sparkColor }">
       <svg
         v-if="spark"
@@ -198,7 +263,7 @@ watch(
   padding: 16px 16px 0;
   display: flex;
   flex-direction: column;
-  min-height: 250px;
+  min-height: 282px;
   transition:
     transform 160ms ease,
     border-color 160ms ease;
@@ -357,6 +422,34 @@ watch(
   display: block;
   height: 100%;
   min-width: 0;
+}
+.service-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  margin-top: auto;
+  padding-top: 12px;
+}
+.service-item {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+.service-item.right {
+  text-align: right;
+}
+.service-item span {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.service-item strong {
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .node-spark {
   height: 58px;

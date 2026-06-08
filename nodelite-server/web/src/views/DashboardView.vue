@@ -9,10 +9,12 @@ import { useWebSocket } from '@/ws';
 import { useBootstrapStore } from '@/stores/bootstrap';
 import { useOverviewStore } from '@/stores/overview';
 import { useNodesStore } from '@/stores/nodes';
+import { useSettingsStore } from '@/stores/settings';
 
 const bootstrapStore = useBootstrapStore();
 const overviewStore = useOverviewStore();
 const nodesStore = useNodesStore();
+const settingsStore = useSettingsStore();
 const ws = useWebSocket();
 const DASHBOARD_REST_FALLBACK_MS = 500;
 
@@ -20,6 +22,7 @@ const onlineCount = computed(() => overviewStore.data?.online_nodes ?? 0);
 
 onMounted(() => {
   void bootstrapStore.load();
+  void settingsStore.load();
 
   // WS-first: subscribe to WebSocket messages
   const offInitial = ws.on('initial_state', (msg) => {

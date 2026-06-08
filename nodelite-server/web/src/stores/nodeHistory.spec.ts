@@ -1,5 +1,7 @@
 import { setActivePinia, createPinia } from 'pinia';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { watch } from 'vue';
+import type { HistoryPoint } from '@/api';
 import { ApiAbortError, ApiError } from '@/api/client';
 import { apiClient } from '@/api';
 import { useNodeHistoryStore, SPARK_REFRESH_MS } from './nodeHistory';
@@ -13,6 +15,23 @@ vi.mock('@/api', async () => {
 });
 
 const mockHistory = vi.mocked(apiClient.nodeHistory);
+
+function historyPoint(loadOne: number): HistoryPoint {
+  return {
+    node_id: 'a',
+    recorded_at: '2026-05-29T00:00:00Z',
+    cpu_usage_percent: 10,
+    load_one: loadOne,
+    load_five: null,
+    load_fifteen: null,
+    memory_used_percent: 25,
+    rx_bytes_per_sec: null,
+    tx_bytes_per_sec: null,
+    latency_ms: null,
+    packet_loss_percent: null,
+    disk_used_percent: null,
+  };
+}
 
 describe('useNodeHistoryStore', () => {
   beforeEach(() => {
@@ -31,6 +50,22 @@ describe('useNodeHistoryStore', () => {
     await store.loadIfStale('a');
     expect(mockHistory).toHaveBeenCalledWith('a', { windowHours: 3, maxPoints: 180 });
     expect(store.points('a')).toEqual([]);
+  });
+
+  it('notifies reactive subscribers when fetched points arrive', async () => {
+    mockHistory.mockResolvedValueOnce([historyPoint(0.42)]);
+    const store = useNodeHistoryStore();
+    const seen: number[] = [];
+    const stop = watch(
+      () => store.entries['a']?.points.length ?? 0,
+      (length) => seen.push(length),
+      { flush: 'sync' },
+    );
+
+    await store.loadIfStale('a');
+    stop();
+
+    expect(seen).toContain(1);
   });
 
   it('dedups concurrent loadIfStale for the same node', async () => {

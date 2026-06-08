@@ -3,9 +3,10 @@ import { mount, flushPromises, RouterLinkStub } from '@vue/test-utils';
 import { createApp, defineComponent, h } from 'vue';
 import { createPinia, setActivePinia } from 'pinia';
 import { setupI18n, getI18n, __resetI18nForTest } from '@/i18n';
-import { apiClient } from '@/api';
+import { apiClient, type HistoryPoint } from '@/api';
 import { useNodeHistoryStore } from '@/stores/nodeHistory';
-import { makeNode } from '@/api/__fixtures__/nodes';
+import { useSettingsStore } from '@/stores/settings';
+import { makeNode, makeSettings } from '@/api/__fixtures__/nodes';
 import NodeCard from './NodeCard.vue';
 
 vi.mock('@/api', async () => {
@@ -25,6 +26,10 @@ const FAKE_DICT = {
     'index.node.cpu': 'CPU',
     'index.node.memory': 'Memory',
     'index.node.memory_used': 'Memory',
+    'index.node.service_expiry': 'Service expiry',
+    'index.node.renewal_price': 'Renewal price',
+    'index.node.service_unlimited': 'Unlimited',
+    'index.node.self_owned': 'Self-owned',
     'common.online': 'Online',
     'common.offline': 'Offline',
     'common.latency_warn': 'High latency',
@@ -35,6 +40,10 @@ const FAKE_DICT = {
     'index.node.cpu': 'CPU',
     'index.node.memory': '内存',
     'index.node.memory_used': '内存',
+    'index.node.service_expiry': '服务到期',
+    'index.node.renewal_price': '续费价格',
+    'index.node.service_unlimited': '无限制',
+    'index.node.self_owned': '自持有',
     'common.online': '在线',
     'common.offline': '离线',
     'common.latency_warn': '高延迟',
@@ -42,6 +51,23 @@ const FAKE_DICT = {
 };
 
 const Stub = defineComponent({ render: () => h('div') });
+
+function historyPoint(loadOne: number): HistoryPoint {
+  return {
+    node_id: 'node-a',
+    recorded_at: '2026-05-29T00:00:00Z',
+    cpu_usage_percent: 10,
+    load_one: loadOne,
+    load_five: null,
+    load_fifteen: null,
+    memory_used_percent: 25,
+    rx_bytes_per_sec: null,
+    tx_bytes_per_sec: null,
+    latency_ms: null,
+    packet_loss_percent: null,
+    disk_used_percent: null,
+  };
+}
 
 async function mountCard(node: ReturnType<typeof makeNode>) {
   const pinia = createPinia();
@@ -114,6 +140,44 @@ describe('NodeCard', () => {
     expect(wrapper.find('[data-test="metric-cpu"]').text()).toBe('—');
   });
 
+  it('renders service expiry and renewal metadata from settings', async () => {
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    const settingsStore = useSettingsStore();
+    settingsStore.data = makeSettings({
+      agents: [
+        {
+          node_id: 'node-a',
+          node_label: 'Node A',
+          online: true,
+          agent_version: '1.0',
+          remote_ip: '10.0.0.1',
+          tags: [],
+          token_expires_at: null,
+          token_expires_in_secs: null,
+          service_expires_at: null,
+          service_unlimited: true,
+          renewal_price: null,
+        },
+      ],
+    });
+    const wrapper = mount(NodeCard, {
+      props: {
+        node: makeNode({
+          identity: { node_id: 'node-a', node_label: 'A', hostname: 'h', tags: [] },
+        }),
+      },
+      global: {
+        plugins: [pinia, getI18n()],
+        stubs: { RouterLink: RouterLinkStub },
+      },
+    });
+    await flushPromises();
+
+    expect(wrapper.find('[data-test="node-service-expiry"]').text()).toBe('Unlimited');
+    expect(wrapper.find('[data-test="node-renewal-price"]').text()).toBe('Self-owned');
+  });
+
   it('shows the offline badge label for an offline node', async () => {
     const node = makeNode({ online: false });
     const wrapper = await mountCard(node);
@@ -167,5 +231,23 @@ describe('NodeCard', () => {
     });
     await flushPromises();
     expect(loadSpy).toHaveBeenCalledTimes(2);
+    expect(wrapper.find('.node-spark path').exists()).toBe(true);
+  });
+
+  it('draws a load sparkline from one history point plus the current snapshot', async () => {
+    mockHistory.mockResolvedValueOnce([historyPoint(0.1)]);
+    const wrapper = await mountCard(
+      makeNode({
+        snapshot: {
+          cpu_usage_percent: 20,
+          load: { one: 0.9 },
+          memory: { total_bytes: 1, used_bytes: 0 },
+        },
+      }),
+    );
+    await flushPromises();
+    await wrapper.vm.$nextTick();
+
+    expect(wrapper.find('.node-spark path').exists()).toBe(true);
   });
 });

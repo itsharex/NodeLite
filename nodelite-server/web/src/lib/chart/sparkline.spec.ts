@@ -97,6 +97,13 @@ describe('buildSparkline', () => {
     expect(spark!.width).toBe(200);
     expect(spark!.height).toBe(60);
   });
+
+  it('expands small load deltas instead of flattening them', () => {
+    const spark = buildSparkline([3.24, 3.28]);
+    expect(spark).not.toBeNull();
+    expect(spark!.line).toContain('52.0');
+    expect(spark!.line).toContain('8.0');
+  });
 });
 
 describe('nodeSparkPoints', () => {

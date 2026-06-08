@@ -41,7 +41,7 @@ export const useNodeHistoryStore = defineStore('nodeHistory', () => {
       error: null,
     };
     entries[nodeId] = created;
-    return created;
+    return entries[nodeId];
   }
 
   async function fetchNow(nodeId: string): Promise<void> {

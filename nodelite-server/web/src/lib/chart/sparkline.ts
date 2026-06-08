@@ -72,14 +72,14 @@ export function buildSparkline(points: number[]): Sparkline | null {
   const padY = SPARK_PAD_Y;
   const min = Math.min(...points);
   const max = Math.max(...points);
-  const span = Math.max(max - min, 1);
+  const rawSpan = max - min;
+  const span = rawSpan > 0 ? rawSpan : Math.max(Math.abs(max), 1);
+  const floor = rawSpan > 0 ? min : min - span / 2;
   const stepX = w / (points.length - 1);
-  const coords = points.map(
-    (value, idx): [number, number] => [
-      idx * stepX,
-      h - padY - ((value - min) / span) * (h - padY * 2),
-    ],
-  );
+  const coords = points.map((value, idx): [number, number] => [
+    idx * stepX,
+    h - padY - ((value - floor) / span) * (h - padY * 2),
+  ]);
   const line = smoothPath(coords);
   const area = `${line} L ${w},${h} L 0,${h} Z`;
   return { width: w, height: h, line, area };
@@ -91,7 +91,7 @@ export function buildSparkline(points: number[]): Sparkline | null {
  */
 export function nodeSparkPoints(
   history: HistoryPoint[] | undefined,
-  currentLoad: number | null | undefined,
+  currentLoad?: number | null,
 ): number[] {
   const points = aggregateSeries(history, 'load_one');
   if (points.length > 0) return points;
