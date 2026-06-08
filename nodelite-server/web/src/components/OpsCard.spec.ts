@@ -14,6 +14,7 @@ const FAKE_DICT = {
     'settings.ops.snapshot': 'Snapshot',
     'settings.ops.server_upgrade': 'Server upgrade command:',
     'settings.ops.agent_upgrade': 'Agent upgrade command:',
+    'settings.summary.operations': 'Operations',
   },
   'zh-CN': {},
 };

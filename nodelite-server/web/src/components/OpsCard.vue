@@ -16,7 +16,10 @@ const rows = computed(() => [
 
 <template>
   <article class="panel" data-test="ops-card">
-    <h2 class="card-title">{{ t('settings.ops.title') }}</h2>
+    <header class="card-head">
+      <span class="card-kicker">{{ t('settings.summary.operations') }}</span>
+      <h2 class="card-title">{{ t('settings.ops.title') }}</h2>
+    </header>
     <div class="kv">
       <template v-for="row in rows" :key="row.label">
         <span class="kv__label">{{ row.label }}</span>
@@ -34,18 +37,27 @@ const rows = computed(() => [
 .panel {
   background: var(--bg-card);
   border: 1px solid var(--border-soft);
-  border-radius: 16px;
-  padding: 18px 20px;
+  border-radius: 8px;
+  padding: 16px;
+}
+.card-head {
+  margin-bottom: 14px;
+}
+.card-kicker {
+  display: block;
+  color: var(--text-muted);
+  font-size: 12px;
+  margin-bottom: 4px;
 }
 .card-title {
-  margin: 0 0 12px;
-  font-size: 14px;
+  margin: 0;
+  font-size: 16px;
   font-weight: 600;
 }
 .kv {
   display: grid;
   grid-template-columns: auto 1fr;
-  gap: 6px 16px;
+  gap: 10px 16px;
   font-size: 13px;
 }
 .kv__label {
@@ -65,6 +77,7 @@ const rows = computed(() => [
 .code {
   margin: 0;
   background: var(--bg-card-soft);
+  border: 1px solid var(--border-soft);
   border-radius: 8px;
   padding: 10px 12px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;

@@ -83,7 +83,10 @@ async function submitUpdate(): Promise<void> {
 
 <template>
   <article class="panel" data-test="server-update-card">
-    <h2 class="card-title">{{ t('settings.version.title') }}</h2>
+    <header class="card-head">
+      <span class="card-kicker">{{ t('settings.summary.version') }}</span>
+      <h2 class="card-title">{{ t('settings.version.title') }}</h2>
+    </header>
     <div class="kv">
       <span class="kv__label">{{ t('settings.version.current') }}</span>
       <span class="kv__value" data-test="server-version">{{ settings.server_version }}</span>
@@ -127,18 +130,27 @@ async function submitUpdate(): Promise<void> {
 .panel {
   background: var(--bg-card);
   border: 1px solid var(--border-soft);
-  border-radius: 16px;
-  padding: 18px 20px;
+  border-radius: 8px;
+  padding: 16px;
+}
+.card-head {
+  margin-bottom: 14px;
+}
+.card-kicker {
+  display: block;
+  color: var(--text-muted);
+  font-size: 12px;
+  margin-bottom: 4px;
 }
 .card-title {
-  margin: 0 0 12px;
-  font-size: 14px;
+  margin: 0;
+  font-size: 16px;
   font-weight: 600;
 }
 .kv {
   display: grid;
   grid-template-columns: auto 1fr;
-  gap: 6px 16px;
+  gap: 10px 16px;
   font-size: 13px;
 }
 .kv__label {
@@ -151,8 +163,9 @@ async function submitUpdate(): Promise<void> {
 }
 .actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
-  margin: 14px 0 4px;
+  margin: 16px 0 4px;
 }
 .note {
   color: var(--text-muted);
@@ -164,15 +177,15 @@ async function submitUpdate(): Promise<void> {
   flex-direction: column;
   gap: 12px;
   border-top: 1px solid var(--border-soft);
-  margin-top: 14px;
-  padding-top: 14px;
+  margin-top: 16px;
+  padding-top: 16px;
 }
 .btn {
   align-self: flex-start;
   background: var(--bg-card-soft);
   color: var(--text-secondary);
   border: 1px solid var(--border-soft);
-  border-radius: 10px;
+  border-radius: 8px;
   padding: 8px 14px;
   font: inherit;
 }

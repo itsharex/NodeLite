@@ -15,6 +15,7 @@ const FAKE_DICT = {
     'settings.tokens.ip': 'Remote IP',
     'settings.tokens.expires_at': 'Expires at',
     'settings.tokens.remaining': 'Remaining',
+    'settings.summary.token_health': 'Token Health',
     'settings.token.no_expiry': 'No expiry',
     'settings.token.expired': 'Expired',
     'settings.duration.days_hours': '{days}d {hours}h',

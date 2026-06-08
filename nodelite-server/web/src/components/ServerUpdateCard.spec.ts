@@ -33,6 +33,7 @@ const FAKE_DICT = {
     'settings.version.update_starting': 'Starting…',
     'settings.version.update_started': 'Started',
     'settings.version.update_failed': 'Failed: {error}',
+    'settings.summary.version': 'Current Version',
     'settings.password.current': 'Current password',
     'settings.security.verification_code': '6-digit code',
   },

@@ -45,7 +45,13 @@ const rows = computed(() =>
 
 <template>
   <article class="panel" data-test="token-table">
-    <h2 class="card-title">{{ t('settings.tokens.title') }}</h2>
+    <header class="card-head">
+      <div>
+        <span class="card-kicker">{{ t('settings.summary.token_health') }}</span>
+        <h2 class="card-title">{{ t('settings.tokens.title') }}</h2>
+      </div>
+      <strong class="agent-count">{{ agents.length }}</strong>
+    </header>
     <p v-if="rows.length === 0" class="empty" data-test="token-table-empty">
       {{ t('settings.tokens.empty') }}
     </p>
@@ -65,7 +71,11 @@ const rows = computed(() =>
           <td :data-label="t('settings.tokens.node')">
             {{ row.label }}<div class="subnote">{{ row.nodeId }}</div>
           </td>
-          <td :data-label="t('settings.tokens.status')">{{ row.status }}</td>
+          <td :data-label="t('settings.tokens.status')">
+            <span class="status-pill" :class="row.online ? 'online' : 'offline'">
+              {{ row.status }}
+            </span>
+          </td>
           <td :data-label="t('settings.tokens.agent')">{{ row.agent }}</td>
           <td :data-label="t('settings.tokens.ip')">{{ row.ip }}</td>
           <td :data-label="t('settings.tokens.expires_at')">{{ row.expiresAt }}</td>
@@ -82,13 +92,32 @@ const rows = computed(() =>
 .panel {
   background: var(--bg-card);
   border: 1px solid var(--border-soft);
-  border-radius: 16px;
-  padding: 18px 20px;
+  border-radius: 8px;
+  padding: 16px;
+}
+.card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+.card-kicker {
+  display: block;
+  color: var(--text-muted);
+  font-size: 12px;
+  margin-bottom: 4px;
 }
 .card-title {
-  margin: 0 0 12px;
-  font-size: 14px;
+  margin: 0;
+  font-size: 16px;
   font-weight: 600;
+}
+.agent-count {
+  color: var(--text-primary);
+  font-size: 22px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
 }
 .empty {
   color: var(--text-muted);
@@ -97,6 +126,9 @@ const rows = computed(() =>
 }
 .tokens {
   width: 100%;
+  overflow: hidden;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
   border-collapse: collapse;
   font-size: 13px;
 }
@@ -110,6 +142,7 @@ const rows = computed(() =>
 .tokens th {
   color: var(--text-muted);
   font-weight: 500;
+  background: var(--bg-card-soft);
 }
 .tokens .numeric {
   text-align: right;
@@ -118,6 +151,25 @@ const rows = computed(() =>
 .subnote {
   color: var(--text-muted);
   font-size: 11px;
+}
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+}
+.status-pill::before {
+  content: '';
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.status-pill.online {
+  color: var(--accent-green);
+}
+.status-pill.offline {
+  color: var(--chart-network-up);
 }
 .expired {
   color: var(--accent-red);

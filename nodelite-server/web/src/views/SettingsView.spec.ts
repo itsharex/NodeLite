@@ -19,6 +19,13 @@ const FAKE_DICT = {
   en: {
     'settings.heading': 'Settings',
     'settings.subtitle': 'sub',
+    'settings.summary.version': 'Current Version',
+    'settings.summary.registered': 'Registered Agents',
+    'settings.summary.token_health': 'Token Health',
+    'settings.summary.token_good': 'Good',
+    'settings.summary.token_expiring': '{count} expiring',
+    'settings.summary.token_attention': '{count} expired',
+    'settings.summary.operations': 'Operations',
     'common.waiting_for_data': 'Waiting…',
     'common.language': 'Language',
     'common.theme_toggle': 'Toggle theme',
@@ -116,6 +123,7 @@ describe('SettingsView', () => {
     const wrapper = await mountView();
     expect(mockSettings).toHaveBeenCalled();
     expect(wrapper.find('[data-test="settings-view"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="settings-summary"]').exists()).toBe(true);
     expect(wrapper.find('[data-test="server-update-card"]').exists()).toBe(true);
     expect(wrapper.find('[data-test="ops-card"]').exists()).toBe(true);
     expect(wrapper.find('[data-test="token-table"]').exists()).toBe(true);
