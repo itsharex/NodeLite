@@ -86,7 +86,7 @@ describe('AppLayout', () => {
     expect(wrapper.find('[data-test="slot-body"]').text()).toBe('Body');
   });
 
-  it('renders GeoIP attribution only for enabled providers', async () => {
+  it('renders DB-IP attribution only when the DB-IP provider is enabled', async () => {
     const wrapper = await mountLayout();
     expect(wrapper.find('.geoip-attribution').exists()).toBe(false);
 
@@ -100,13 +100,19 @@ describe('AppLayout', () => {
       refresh_interval_secs: 5,
       registered_nodes: 0,
       geoip_enabled: true,
+      geoip_provider: 'ipwhois',
+    };
+    await wrapper.vm.$nextTick();
+
+    expect(wrapper.find('.geoip-attribution').exists()).toBe(false);
+
+    bootstrapStore.data = {
+      ...bootstrapStore.data,
       geoip_provider: 'custom',
     };
     await wrapper.vm.$nextTick();
 
-    let footer = wrapper.find('.geoip-attribution');
-    expect(footer.text()).toBe('GeoIP database: custom MMDB');
-    expect(footer.find('a').exists()).toBe(false);
+    expect(wrapper.find('.geoip-attribution').exists()).toBe(false);
 
     bootstrapStore.data = {
       ...bootstrapStore.data,
@@ -114,21 +120,10 @@ describe('AppLayout', () => {
     };
     await wrapper.vm.$nextTick();
 
-    footer = wrapper.find('.geoip-attribution');
+    const footer = wrapper.find('.geoip-attribution');
     const attributionLink = footer.find('a');
     expect(attributionLink.text()).toBe('IP geolocation by DB-IP');
     expect(attributionLink.attributes('href')).toBe('https://db-ip.com');
-
-    bootstrapStore.data = {
-      ...bootstrapStore.data,
-      geoip_provider: 'ipwhois',
-    };
-    await wrapper.vm.$nextTick();
-
-    footer = wrapper.find('.geoip-attribution');
-    const ipwhoisLink = footer.find('a');
-    expect(ipwhoisLink.text()).toBe('IP geolocation by IPWhois');
-    expect(ipwhoisLink.attributes('href')).toBe('https://ipwhois.io');
 
     bootstrapStore.data = {
       ...bootstrapStore.data,

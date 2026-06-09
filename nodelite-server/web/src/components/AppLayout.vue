@@ -21,22 +21,10 @@ type GeoIpAttribution = {
 
 const geoipAttribution = computed<GeoIpAttribution | null>(() => {
   const bootstrap = bootstrapStore.data;
-  if (!bootstrap?.geoip_enabled) return null;
-  if (bootstrap.geoip_provider === 'dbip') {
+  if (bootstrap?.geoip_enabled && bootstrap.geoip_provider === 'dbip') {
     return {
       label: 'IP geolocation by DB-IP',
       href: 'https://db-ip.com',
-    };
-  }
-  if (bootstrap.geoip_provider === 'ipwhois') {
-    return {
-      label: 'IP geolocation by IPWhois',
-      href: 'https://ipwhois.io',
-    };
-  }
-  if (bootstrap.geoip_provider === 'custom') {
-    return {
-      label: 'GeoIP database: custom MMDB',
     };
   }
   return null;
