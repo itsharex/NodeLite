@@ -12,7 +12,7 @@ import {
   type ChartData,
   type ChartPoint,
 } from './chartData';
-import { formatChartValue, type ChartValueKind } from './format';
+import { formatChartAxisValue, type ChartValueKind } from './format';
 import { chartPadLeft, chartY, smoothPath } from './geometry';
 
 const PAD_RIGHT = 14;
@@ -113,11 +113,13 @@ function isFiniteValue(p: ChartPoint): p is ChartPoint & { value: number } {
 // applied in the template, so only y + label are computed here.
 function buildGrid(bounds: ChartBounds, height: number, kind: ChartValueKind): ChartGridLine[] {
   const ratios = height < 100 ? [0, 0.5, 1] : [0, 0.25, 0.5, 0.75, 1];
+  const maxStep = Math.max(1, ratios.length - 1);
+  const step = (bounds.displayMax - bounds.displayMin) / maxStep;
   return ratios.map((ratio) => {
     const tick = bounds.displayMin + (bounds.displayMax - bounds.displayMin) * ratio;
     return {
       y: chartY(tick, bounds, height, PAD_TOP, PAD_BOTTOM),
-      label: formatChartValue(tick, kind),
+      label: formatChartAxisValue(tick, kind, step),
     };
   });
 }

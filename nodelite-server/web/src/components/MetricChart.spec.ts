@@ -91,4 +91,34 @@ describe('MetricChart', () => {
     expect(wrapper.findAll('[data-test="metric-chart-line"]')).toHaveLength(2);
     expect(wrapper.find('[data-test="metric-chart-area"]').exists()).toBe(false);
   });
+
+  it('positions hover affordances through transforms so movement can animate', async () => {
+    const wrapper = mountChart({
+      points: pts([10, 50, 90]),
+      valueKind: 'percent',
+      color: 'var(--chart-cpu)',
+      label: 'CPU',
+    });
+    const chart = wrapper.find('[data-test="metric-chart"]');
+    vi.spyOn(chart.element, 'getBoundingClientRect').mockReturnValue({
+      left: 0,
+      top: 0,
+      right: 600,
+      bottom: 180,
+      width: 600,
+      height: 180,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    } as DOMRect);
+
+    await chart.trigger('pointermove', { clientX: 300, clientY: 80 });
+
+    expect(wrapper.find('[data-test="metric-chart-hover-line"]').attributes('style')).toContain(
+      'translate(',
+    );
+    expect(wrapper.find('[data-test="metric-chart-hover-circle"]').attributes('style')).toContain(
+      'translate(',
+    );
+  });
 });

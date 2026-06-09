@@ -181,23 +181,29 @@ const { model, hover, onPointerMove, onPointerLeave } = useChart(
 
         <g v-if="hover" class="metric-chart__hover">
           <line
-            :x1="hover.lineX"
-            :x2="hover.lineX"
+            class="metric-chart__hover-line"
+            data-test="metric-chart-hover-line"
+            x1="0"
+            x2="0"
             :y1="hover.lineY1"
             :y2="hover.lineY2"
             stroke="currentColor"
             stroke-opacity="0.46"
             stroke-width="1"
+            :style="{ transform: `translate(${hover.lineX}px, 0px)` }"
           />
           <circle
             v-for="(c, i) in hover.circles"
             :key="i"
-            :cx="c.cx"
-            :cy="c.cy"
+            class="metric-chart__hover-circle"
+            data-test="metric-chart-hover-circle"
+            cx="0"
+            cy="0"
             r="4"
             stroke-width="2"
             :stroke="c.color"
             fill="var(--bg-card)"
+            :style="{ transform: `translate(${c.cx}px, ${c.cy}px)` }"
           />
         </g>
       </svg>
@@ -241,6 +247,16 @@ const { model, hover, onPointerMove, onPointerLeave } = useChart(
   pointer-events: none;
   font-variant-numeric: tabular-nums;
 }
+.metric-chart__hover {
+  pointer-events: none;
+}
+.metric-chart__hover-line,
+.metric-chart__hover-circle {
+  transform-box: view-box;
+  transform-origin: 0 0;
+  transition: transform 160ms ease;
+  will-change: transform;
+}
 .chart-tooltip {
   position: absolute;
   pointer-events: none;
@@ -255,6 +271,11 @@ const { model, hover, onPointerMove, onPointerLeave } = useChart(
   z-index: 5;
   color: var(--text-primary);
   font-variant-numeric: tabular-nums;
+  transition:
+    left 160ms ease,
+    top 160ms ease,
+    transform 160ms ease;
+  will-change: left, top, transform;
 }
 .chart-tooltip__time {
   color: var(--text-muted);
@@ -285,5 +306,12 @@ const { model, hover, onPointerMove, onPointerLeave } = useChart(
   height: 7px;
   border-radius: 50%;
   margin-right: 5px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .metric-chart__hover-line,
+  .metric-chart__hover-circle,
+  .chart-tooltip {
+    transition: none;
+  }
 }
 </style>

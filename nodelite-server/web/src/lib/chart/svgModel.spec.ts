@@ -124,4 +124,15 @@ describe('buildMultiAreaChart', () => {
     );
     expect(model.padLeft).toBe(62);
   });
+
+  it('keeps fractional number grid labels distinct on small load ranges', () => {
+    const model = buildMultiAreaChart(
+      [{ label: '1m', color: 'var(--chart-load-one)', points: pts([0, 0.05, 0.1]) }],
+      { ...opts, valueKind: 'number', minValue: 0 },
+    );
+    const labels = model.grid.map((line) => line.label);
+    expect(new Set(labels).size).toBe(labels.length);
+    expect(labels).toContain('0.03');
+    expect(labels).toContain('0.10');
+  });
 });

@@ -22,3 +22,20 @@ export function formatChartValue(value: number | null | undefined, kind: ChartVa
   }
   return numeric >= 100 ? numeric.toFixed(0) : numeric.toFixed(1);
 }
+
+export function formatChartAxisValue(
+  value: number | null | undefined,
+  kind: ChartValueKind,
+  step: number,
+): string {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return '—';
+  if (kind !== 'number') return formatChartValue(value, kind);
+
+  const absStep = Math.abs(Number(step));
+  if (Number.isFinite(absStep) && absStep > 0 && absStep < 1) {
+    const decimals = Math.min(4, Math.max(1, Math.ceil(-Math.log10(absStep))));
+    return numeric.toFixed(decimals);
+  }
+  return formatChartValue(value, kind);
+}
