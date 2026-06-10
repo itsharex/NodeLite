@@ -173,9 +173,13 @@ export function nodeRegionKey(node: NodeListItem): string | null {
   const tags = node.identity.tags || [];
   for (const tag of tags) {
     const lower = String(tag).toLowerCase();
-    if (REGION_HINTS[lower]) return lower;
     const m = lower.match(/^(?:flag|country|region|cc|loc)[:=](\w+)$/);
-    if (m && m[1] && REGION_HINTS[m[1]]) return m[1];
+    const taggedRegion = m ? normalizeRegionHint(m[1]) : null;
+    if (taggedRegion) return taggedRegion;
+  }
+  for (const tag of tags) {
+    const region = normalizeRegionHint(String(tag));
+    if (region) return region;
   }
   if (locationRegion) return locationRegion;
   return null;

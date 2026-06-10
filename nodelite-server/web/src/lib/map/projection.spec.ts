@@ -46,6 +46,14 @@ describe('nodeRegionKey', () => {
     expect(nodeRegionKey(node)).toBe('de');
   });
 
+  it('prefers structured country tags over broad region tags', () => {
+    const node = makeNode({
+      identity: { node_id: 'x', node_label: 'X', hostname: 'h', tags: ['eu', 'relay', 'country:de'] },
+    });
+    expect(nodeRegionKey(node)).toBe('de');
+    expect(nodeFlag(node)).toBe('🇩🇪');
+  });
+
   it('matches a flag:xx style tag when geoip is unavailable', () => {
     const node = makeNode({
       identity: { node_id: 'x', node_label: 'X', hostname: 'web-us-1', tags: ['flag:jp'] },
