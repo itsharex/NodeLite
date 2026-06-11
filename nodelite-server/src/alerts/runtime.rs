@@ -27,11 +27,11 @@ const MAX_CONCURRENT_DELIVERIES: usize = 8;
 #[derive(Debug)]
 enum DeliveryJob {
     Alert {
-        config: AlertingConfig,
+        config: Arc<AlertingConfig>,
         event: AlertEvent,
     },
     Inspection {
-        config: AlertingConfig,
+        config: Arc<AlertingConfig>,
         occurred_at: DateTime<Utc>,
         local_date: NaiveDate,
         lookback_hours: u64,
@@ -42,12 +42,12 @@ enum DeliveryJob {
 #[derive(Debug)]
 enum DeliveryResult {
     Alert {
-        config: AlertingConfig,
+        config: Arc<AlertingConfig>,
         event: AlertEvent,
         result: Result<(), AlertDeliveryError>,
     },
     Inspection {
-        config: AlertingConfig,
+        config: Arc<AlertingConfig>,
         local_date: NaiveDate,
         report: InspectionReport,
         result: Result<(), AlertDeliveryError>,
@@ -55,7 +55,7 @@ enum DeliveryResult {
 }
 
 pub(crate) fn spawn_alert_runtime(
-    alerting: Arc<RwLock<AlertingConfig>>,
+    alerting: Arc<RwLock<Arc<AlertingConfig>>>,
     shared: SharedState,
     shutdown: CancellationToken,
 ) -> JoinHandle<()> {
@@ -65,7 +65,7 @@ pub(crate) fn spawn_alert_runtime(
 }
 
 async fn run_alert_runtime(
-    alerting: Arc<RwLock<AlertingConfig>>,
+    alerting: Arc<RwLock<Arc<AlertingConfig>>>,
     shared: SharedState,
     shutdown: CancellationToken,
 ) {
@@ -89,7 +89,7 @@ async fn run_alert_runtime(
                 );
                 let config = {
                     let alerting = alerting.read().await;
-                    alerting.clone()
+                    Arc::clone(&alerting)
                 };
                 if !config.enabled {
                     tracker.clear();
@@ -216,14 +216,14 @@ fn process_delivery_results(
 fn enqueue_alert_delivery(
     delivery_tx: &mpsc::Sender<DeliveryJob>,
     tracker: &mut AlertStateTracker,
-    config: &AlertingConfig,
+    config: &Arc<AlertingConfig>,
     event: &AlertEvent,
     now: DateTime<Utc>,
 ) {
     if try_enqueue(
         delivery_tx,
         DeliveryJob::Alert {
-            config: config.clone(),
+            config: Arc::clone(config),
             event: event.clone(),
         },
     )
@@ -243,7 +243,7 @@ fn enqueue_alert_delivery(
 fn enqueue_inspection_delivery(
     delivery_tx: &mpsc::Sender<DeliveryJob>,
     inspection_dispatch: &mut InspectionDispatchState,
-    config: &AlertingConfig,
+    config: &Arc<AlertingConfig>,
     report: InspectionReport,
     local_date: NaiveDate,
     now: DateTime<Utc>,
@@ -251,7 +251,7 @@ fn enqueue_inspection_delivery(
     if try_enqueue(
         delivery_tx,
         DeliveryJob::Inspection {
-            config: config.clone(),
+            config: Arc::clone(config),
             occurred_at: now,
             local_date,
             lookback_hours: config.inspection.lookback_hours,
@@ -276,7 +276,7 @@ fn enqueue_inspection_delivery(
 fn handle_alert_delivery_result(
     tracker: &mut AlertStateTracker,
     delivery_tx: &mpsc::Sender<DeliveryJob>,
-    config: &AlertingConfig,
+    config: &Arc<AlertingConfig>,
     event: &AlertEvent,
     result: Result<(), AlertDeliveryError>,
 ) {

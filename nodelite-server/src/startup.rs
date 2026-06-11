@@ -175,7 +175,7 @@ async fn initialize_server_runtime(
         ws_admission: WsAdmissionController::new(&config.ws),
         browser_ws_admission: WsAdmissionController::new(&config.ws),
         readonly_auth: Arc::new(RwLock::new(readonly_route_auth)),
-        alerting: Arc::new(RwLock::new(config.alerting.clone())),
+        alerting: Arc::new(RwLock::new(Arc::new(config.alerting.clone()))),
         two_factor_sessions: TwoFactorSessions::new(),
         config_path: Arc::new(config_path.to_path_buf()),
         shutdown,

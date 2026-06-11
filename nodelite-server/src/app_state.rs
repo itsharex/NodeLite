@@ -41,7 +41,9 @@ pub(crate) struct AppState {
     /// 同型但实例独立,使浏览器连接与 agent 连接各自计数、互不挤占配额。
     pub(crate) browser_ws_admission: WsAdmissionController,
     pub(crate) readonly_auth: Arc<RwLock<ReadonlyRouteAuth>>,
-    pub(crate) alerting: Arc<RwLock<AlertingConfig>>,
+    /// 内层 `Arc` 让告警运行时和投递任务以指针克隆共享配置快照,
+    /// 更新时整体替换内层 `Arc`(见 `handlers/settings/alerts.rs`)。
+    pub(crate) alerting: Arc<RwLock<Arc<AlertingConfig>>>,
     pub(crate) two_factor_sessions: TwoFactorSessions,
     pub(crate) config_path: Arc<PathBuf>,
     /// 进程级关停信号。axum graceful shutdown 之后由 `run_server` 触发,
@@ -132,7 +134,7 @@ impl AppState {
             readonly_auth: Arc::new(RwLock::new(ReadonlyRouteAuth::from_config(
                 config.readonly_auth.clone(),
             ))),
-            alerting: Arc::new(RwLock::new(config.alerting.clone())),
+            alerting: Arc::new(RwLock::new(Arc::new(config.alerting.clone()))),
             two_factor_sessions: TwoFactorSessions::new(),
             config_path,
             shutdown: CancellationToken::new(),
