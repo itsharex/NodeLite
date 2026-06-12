@@ -97,8 +97,9 @@ pub struct HistoryStore {
     available: Arc<AtomicBool>,
     /// 持久化 SQLite 写连接,由 writer task 短暂持有。
     write_connection: Arc<Mutex<Option<Connection>>>,
-    /// 节点 → 上一次成功节流通过的时间。仅短暂持有 lock(check + 乐观更新),
-    /// 不再跨越 spawn_blocking,因此与 SQLite I/O 解耦。
+    /// 节点 → 上一次成功节流通过的时间。每次 record_status 只做一次
+    /// lock 往返(check + enqueue + 乐观更新),guard 不跨越任何 await/spawn_blocking,
+    /// 因此与 SQLite I/O 解耦。
     last_written_at: Arc<Mutex<HashMap<String, DateTime<Utc>>>>,
     /// 最近一次执行清理删除的 Unix 时间戳(0 = 从未)。Writer task 内部更新,
     /// 用 AtomicI64 避免再多一把 mutex。
@@ -218,16 +219,8 @@ impl HistoryStore {
             return;
         }
 
-        let initial_recorded_at = status.last_seen.unwrap_or_else(Utc::now);
-        if self
-            .is_throttled(status.identity.node_id.as_str(), initial_recorded_at)
-            .await
-        {
-            return;
-        }
-
-        // 把样本推给 writer task。try_send 在 channel 满时立即失败,这里宁可丢一条样本
-        // 也不要让 WS 处理路径被反压;丢弃由 dropped_writes 计数提示运维。
+        // 先取 writer sender 再进节流 mutex,避免持有 mutex 时再 await 另一把锁。
+        // writer_tx 的写者只有初始化/关停两处,这次读锁几乎无竞争。
         let tx = {
             let guard = self.writer_tx.read().await;
             guard.as_ref().cloned()
@@ -236,13 +229,12 @@ impl HistoryStore {
             return;
         };
 
-        let Some(point) = build_point(status) else {
-            return;
-        };
-        let node_id = point.node_id.clone();
-        let recorded_at = point.recorded_at;
+        // 单次 mutex 往返完成"节流检查 + enqueue + 更新水位"。
+        // 检查在 build_point 之前,被节流的心跳(常态路径)不付出构造样本的成本;
+        // guard 跨越的全部是同步操作,不会把锁持有期拖进任何 await。
+        let recorded_at = status.last_seen.unwrap_or_else(Utc::now);
         let mut throttle = self.last_written_at.lock().await;
-        if let Some(previous) = throttle.get(&node_id) {
+        if let Some(previous) = throttle.get(status.identity.node_id.as_str()) {
             let Ok(elapsed) = recorded_at
                 .signed_duration_since(previous.to_owned())
                 .to_std()
@@ -254,6 +246,14 @@ impl HistoryStore {
             }
         }
 
+        let Some(point) = build_point(status) else {
+            return;
+        };
+        let node_id = point.node_id.clone();
+        let recorded_at = point.recorded_at;
+
+        // try_send 在 channel 满时立即失败,这里宁可丢一条样本
+        // 也不要让 WS 处理路径被反压;丢弃由 dropped_writes 计数提示运维。
         match try_enqueue(&tx, point) {
             Ok(()) => {
                 throttle.insert(node_id, recorded_at);
@@ -270,20 +270,6 @@ impl HistoryStore {
                 self.available.store(false, Ordering::Relaxed);
             }
         }
-    }
-
-    async fn is_throttled(&self, node_id: &str, recorded_at: DateTime<Utc>) -> bool {
-        let throttle = self.last_written_at.lock().await;
-        let Some(previous) = throttle.get(node_id) else {
-            return false;
-        };
-        let Ok(elapsed) = recorded_at
-            .signed_duration_since(previous.to_owned())
-            .to_std()
-        else {
-            return true;
-        };
-        elapsed < Duration::from_secs(DEFAULT_HISTORY_WRITE_INTERVAL_SECS)
     }
 
     /// 关停:drop sender → writer task 自动 drain 残留 batch 后退出,
