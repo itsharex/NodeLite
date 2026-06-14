@@ -15,8 +15,7 @@ use crate::state::SharedState;
 use super::delivery::AlertDeliveryError;
 use super::{
     AlertEvent, AlertEventKind, AlertStateTracker, InspectionReport, InspectionSummary,
-    build_inspection_report, deliver_alert_event, deliver_inspection_summary, evaluate_rules,
-    smtp_endpoint_label, webhook_endpoint_label,
+    deliver_alert_event, deliver_inspection_summary, smtp_endpoint_label, webhook_endpoint_label,
 };
 
 const ALERT_EVALUATION_INTERVAL_SECS: u64 = 30;
@@ -98,11 +97,10 @@ async fn run_alert_runtime(
                 }
 
                 let now = Utc::now();
-                let statuses = shared.list_statuses().await;
                 if config.rules.is_empty() {
                     tracker.clear();
                 } else {
-                    let matches = evaluate_rules(&config.rules, &statuses, now);
+                    let matches = shared.evaluate_alert_rules(&config.rules, now).await;
                     for event in tracker.update(&config.rules, &matches, now) {
                         log_alert_event(&event);
                         enqueue_alert_delivery(&delivery_tx, &mut tracker, &config, &event, now);
@@ -113,7 +111,9 @@ async fn run_alert_runtime(
                     && let Some(local_date) =
                         inspection_dispatch.due_date(&config.inspection.local_time, Local::now(), now)
                 {
-                    let report = build_inspection_report(&config.inspection, &statuses, now);
+                    let report = shared
+                        .build_alert_inspection_report(&config.inspection, now)
+                        .await;
                     enqueue_inspection_delivery(
                         &delivery_tx,
                         &mut inspection_dispatch,

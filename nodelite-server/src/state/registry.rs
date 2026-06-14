@@ -7,13 +7,17 @@ use chrono::{DateTime, Utc};
 #[cfg(test)]
 use nodelite_proto::DiskUsage;
 use nodelite_proto::{
-    GeoIpLocation, MetricsConfig, NodeIdentity, NodeListIdentity, NodeListItem, NodeListSnapshot,
-    NodeSnapshot, NodeStatus, OverviewData,
+    AlertRuleConfig, GeoIpLocation, InspectionConfig, MetricsConfig, NodeIdentity,
+    NodeListIdentity, NodeListItem, NodeListSnapshot, NodeSnapshot, NodeStatus, OverviewData,
 };
 
 use super::overview::{OverviewNode, build_overview_from_iter};
 use super::session_control::SessionControlHandle;
 use crate::ServerReadiness;
+use crate::alerts::{
+    AlertStatusView, EvaluatedRule, InspectionReport,
+    build_inspection_report as build_alert_inspection_report, evaluate_rules,
+};
 use crate::handlers::metrics_exporter::{PrometheusNode, render_prometheus_metrics_from_iter};
 
 #[derive(Debug, Default)]
@@ -191,6 +195,36 @@ impl NodeEntry {
     }
 }
 
+impl AlertStatusView for NodeEntry {
+    fn node_id(&self) -> &str {
+        &self.identity.node_id
+    }
+
+    fn node_label(&self) -> &str {
+        &self.identity.node_label
+    }
+
+    fn tags(&self) -> &[String] {
+        &self.identity.tags
+    }
+
+    fn snapshot(&self) -> Option<&NodeSnapshot> {
+        self.snapshot.as_ref()
+    }
+
+    fn last_seen(&self) -> Option<DateTime<Utc>> {
+        self.last_seen
+    }
+
+    fn latency_ms(&self) -> Option<u64> {
+        self.latency_ms
+    }
+
+    fn online(&self) -> bool {
+        self.online
+    }
+}
+
 fn geoip_fields_from_location(
     geoip: Option<&GeoIpLocation>,
 ) -> (Option<String>, Option<String>, Option<f64>, Option<f64>) {
@@ -336,19 +370,27 @@ impl Registry {
     }
 
     pub(super) fn list_statuses(&self) -> Vec<NodeStatus> {
-        self.sorted_node_ids
-            .iter()
-            .filter_map(|node_id| self.nodes.get(node_id))
-            .map(NodeEntry::to_status)
-            .collect()
+        self.sorted_entries().map(NodeEntry::to_status).collect()
     }
 
     pub(super) fn list_node_summaries(&self) -> Vec<NodeListItem> {
-        self.sorted_node_ids
-            .iter()
-            .filter_map(|node_id| self.nodes.get(node_id))
-            .map(NodeEntry::to_summary)
-            .collect()
+        self.sorted_entries().map(NodeEntry::to_summary).collect()
+    }
+
+    pub(super) fn evaluate_alert_rules(
+        &self,
+        rules: &[AlertRuleConfig],
+        now: DateTime<Utc>,
+    ) -> Vec<EvaluatedRule> {
+        evaluate_rules(rules, self.sorted_entries(), now)
+    }
+
+    pub(super) fn build_alert_inspection_report(
+        &self,
+        inspection: &InspectionConfig,
+        now: DateTime<Utc>,
+    ) -> InspectionReport {
+        build_alert_inspection_report(inspection, self.sorted_entries(), now)
     }
 
     pub(super) fn get_status(&self, node_id: &str) -> Option<NodeStatus> {
@@ -516,6 +558,12 @@ impl Registry {
                 .cmp(&right.identity.node_label)
                 .then_with(|| left.identity.node_id.cmp(&right.identity.node_id))
         });
+    }
+
+    fn sorted_entries(&self) -> impl Iterator<Item = &NodeEntry> {
+        self.sorted_node_ids
+            .iter()
+            .filter_map(|node_id| self.nodes.get(node_id))
     }
 }
 

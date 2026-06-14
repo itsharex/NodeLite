@@ -22,8 +22,8 @@ use std::time::Duration;
 use axum::body::Bytes;
 use chrono::{DateTime, Utc};
 use nodelite_proto::{
-    BrowserMessage, GeoIpLocation, NodeIdentity, NodeListItem, NodeSnapshot, NodeStatus,
-    OverviewData, ServerConfig,
+    AlertRuleConfig, BrowserMessage, GeoIpLocation, InspectionConfig, NodeIdentity, NodeListItem,
+    NodeSnapshot, NodeStatus, OverviewData, ServerConfig,
 };
 use tokio::sync::{Mutex, RwLock, broadcast, oneshot};
 use tokio_util::sync::CancellationToken;
@@ -46,6 +46,7 @@ enum ApiBodyKind {
 /// 的 revision 影响范围收窄到 nodes,避免聚合数据无限期不刷新。
 const OVERVIEW_CACHE_MAX_STALE: Duration = Duration::from_secs(1);
 use crate::ServerReadiness;
+use crate::alerts::{EvaluatedRule, InspectionReport};
 use crate::handlers::metrics_exporter::{
     ApiCacheMetrics, SqliteWalCheckpointMetrics, WsMessageMetrics,
 };
@@ -262,6 +263,24 @@ impl SharedState {
     pub async fn list_node_summaries(&self) -> Vec<NodeListItem> {
         let registry = self.registry.read().await;
         registry.list_node_summaries()
+    }
+
+    pub(crate) async fn evaluate_alert_rules(
+        &self,
+        rules: &[AlertRuleConfig],
+        now: DateTime<Utc>,
+    ) -> Vec<EvaluatedRule> {
+        let registry = self.registry.read().await;
+        registry.evaluate_alert_rules(rules, now)
+    }
+
+    pub(crate) async fn build_alert_inspection_report(
+        &self,
+        inspection: &InspectionConfig,
+        now: DateTime<Utc>,
+    ) -> InspectionReport {
+        let registry = self.registry.read().await;
+        registry.build_alert_inspection_report(inspection, now)
     }
 
     /// 返回浏览器全量视图和对应 revision。revision 在持有 registry 读锁时读取:
