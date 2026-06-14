@@ -238,6 +238,36 @@ fn registry_spreads_runtime_entries_across_shards() {
 }
 
 #[test]
+fn browser_view_holds_shard_locks_until_revision_capture() {
+    let registry = Registry::default();
+    let now = Utc
+        .with_ymd_and_hms(2026, 5, 7, 0, 0, 0)
+        .single()
+        .expect("valid test datetime");
+
+    registry.register_node(
+        1,
+        sample_identity(),
+        Some("198.51.100.10".to_string()),
+        None,
+        None,
+        now,
+    );
+
+    let (nodes, overview, revision) = registry.browser_view_with_revision(|| {
+        assert!(
+            registry.shard_is_read_locked_for_test("hk-01"),
+            "revision must be captured while the browser view still holds shard read locks"
+        );
+        7
+    });
+
+    assert_eq!(revision, 7);
+    assert_eq!(nodes.len(), 1);
+    assert_eq!(overview.total_nodes, 1);
+}
+
+#[test]
 fn runtime_entry_is_smaller_than_cached_external_models() {
     assert!(
         Registry::runtime_entry_inline_bytes_for_test()

@@ -412,14 +412,18 @@ impl Registry {
             .collect()
     }
 
-    pub(super) fn browser_view(&self) -> (Vec<NodeListItem>, OverviewData) {
+    pub(super) fn browser_view_with_revision<R>(
+        &self,
+        load_revision: impl FnOnce() -> R,
+    ) -> (Vec<NodeListItem>, OverviewData, R) {
         let shards = self.read_all_shards();
         let nodes = sorted_entries(&shards)
             .into_iter()
             .map(NodeEntry::to_summary)
             .collect();
         let overview = overview_from_shards(&shards);
-        (nodes, overview)
+        let revision = load_revision();
+        (nodes, overview, revision)
     }
 
     pub(super) fn evaluate_alert_rules(
@@ -606,6 +610,11 @@ impl Registry {
             .iter()
             .map(|shard| read_lock(shard).nodes.len())
             .collect()
+    }
+
+    #[cfg(test)]
+    pub(super) fn shard_is_read_locked_for_test(&self, node_id: &str) -> bool {
+        self.shard_for(node_id).try_write().is_err()
     }
 
     #[cfg(test)]

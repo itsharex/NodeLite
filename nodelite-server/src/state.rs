@@ -281,8 +281,9 @@ impl SharedState {
     /// revision 用于让浏览器端识别后续增量是否基于同一代节点视图。
     pub(crate) async fn browser_snapshot(&self) -> BrowserSnapshot {
         let generated_at = Utc::now();
-        let (nodes, overview) = self.registry.browser_view();
-        let revision = self.nodes_revision.load(Ordering::Acquire);
+        let (nodes, overview, revision) = self
+            .registry
+            .browser_view_with_revision(|| self.nodes_revision.load(Ordering::Acquire));
         BrowserSnapshot {
             revision,
             generated_at,
